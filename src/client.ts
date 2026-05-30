@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import type { DirectoryClient } from "./directory.js";
-import type { SignedGrant, InvokeRequest, InvokeResponse } from "./envelope.js";
+import type { SignedGrant, InvokeRequest, OpenInvokeRequest, InvokeResponse } from "./envelope.js";
 import {
   InvokeResponseSchema,
   sig2Payload,
+  sig2OpenPayload,
   sig3Payload,
 } from "./envelope.js";
 import { ModuleError, authError, infraError } from "./errors.js";
@@ -14,7 +15,8 @@ export interface CallOptions {
   target: string;
   scope: string;
   input: unknown;
-  grant: SignedGrant;
+  /** Required for protected scopes; omit for open scopes (Sig 2 only). */
+  grant?: SignedGrant;
   dryRun?: boolean;
 }
 
@@ -94,23 +96,39 @@ export async function callScope(
 ): Promise<unknown> {
   const { target, scope, input, grant, dryRun = false } = options;
 
-  validateCallGrant(grant, ctx.moduleId, target, scope);
+  if (grant !== undefined) {
+    validateCallGrant(grant, ctx.moduleId, target, scope);
+  }
 
   const endpoint = await resolveEndpoint(ctx.directory, target);
   const timestamp = new Date().toISOString();
   const nonce = randomUUID();
   const requestId = randomUUID();
 
-  const envelope: InvokeRequest = {
-    payload: input,
-    grant,
-    scope,
-    timestamp,
-    nonce,
-    requesterSignature: "", // filled below
-  };
-
-  envelope.requesterSignature = signObject(sig2Payload(envelope), ctx.privateKey);
+  let requestBody: string;
+  if (grant === undefined) {
+    const envelope: OpenInvokeRequest = {
+      payload: input,
+      requester: ctx.moduleId,
+      scope,
+      timestamp,
+      nonce,
+      requesterSignature: "",
+    };
+    envelope.requesterSignature = signObject(sig2OpenPayload(envelope), ctx.privateKey);
+    requestBody = JSON.stringify(envelope);
+  } else {
+    const envelope: InvokeRequest = {
+      payload: input,
+      grant,
+      scope,
+      timestamp,
+      nonce,
+      requesterSignature: "",
+    };
+    envelope.requesterSignature = signObject(sig2Payload(envelope), ctx.privateKey);
+    requestBody = JSON.stringify(envelope);
+  }
 
   const url = `${endpoint}/invoke/${encodeURIComponent(scope)}`;
   let response: Response;
@@ -123,7 +141,7 @@ export async function callScope(
         "X-Request-Id": requestId,
         ...(dryRun ? { "X-Dry-Run": "true" } : {}),
       },
-      body: JSON.stringify(envelope),
+      body: requestBody,
     });
   } catch {
     throw infraError("network_error", "Failed to reach target module");

@@ -3,9 +3,9 @@ import { z } from "zod";
 import { generateKeyPair } from "../src/keys.js";
 import { signObject } from "../src/signing.js";
 import { InMemoryDirectoryClient } from "../src/directory.js";
-import { verifyInvokeRequest, NonceCache } from "../src/verify.js";
-import type { SignedGrant, InvokeRequest } from "../src/envelope.js";
-import { sig1Payload, sig2Payload } from "../src/envelope.js";
+import { verifyInvokeRequest, verifyOpenInvokeRequest, NonceCache } from "../src/verify.js";
+import type { SignedGrant, InvokeRequest, OpenInvokeRequest } from "../src/envelope.js";
+import { sig1Payload, sig2Payload, sig2OpenPayload } from "../src/envelope.js";
 
 describe("verify", () => {
   const holderKeys = generateKeyPair();
@@ -83,6 +83,7 @@ describe("verify", () => {
       directory,
     });
 
+    expect(ctx.open).toBe(false);
     expect(ctx.subject).toBe("huglo:user:user-abc");
     expect(ctx.caller).toBe("foaf");
     expect(ctx.input).toEqual({ amount: 100, vendor: "Acme" });
@@ -251,5 +252,100 @@ describe("verify", () => {
         directory,
       }),
     ).rejects.toMatchObject({ code: "invalid_payload" });
+  });
+});
+
+describe("verifyOpenInvokeRequest", () => {
+  const holderKeys = generateKeyPair();
+  const requesterKeys = generateKeyPair();
+  const directory = new InMemoryDirectoryClient();
+  const nonceCache = new NonceCache();
+  const inputSchema = z.object({});
+
+  beforeEach(() => {
+    nonceCache.clear();
+    directory.clear();
+    directory.registerModule(
+      "trovi",
+      "http://localhost:3000",
+      holderKeys.publicKey,
+      holderKeys.publicKeyBase64,
+    );
+    directory.registerModule(
+      "foaf",
+      "http://localhost:3001",
+      requesterKeys.publicKey,
+      requesterKeys.publicKeyBase64,
+    );
+  });
+
+  function buildOpenRequest(overrides: Partial<OpenInvokeRequest> = {}): OpenInvokeRequest {
+    const req: OpenInvokeRequest = {
+      payload: {},
+      requester: "foaf",
+      scope: "status:read",
+      timestamp: new Date().toISOString(),
+      nonce: crypto.randomUUID(),
+      requesterSignature: "",
+      ...overrides,
+    };
+    req.requesterSignature = signObject(sig2OpenPayload(req), requesterKeys.privateKey);
+    return req;
+  }
+
+  it("passes verification for a valid open request", async () => {
+    const req = buildOpenRequest();
+    const ctx = await verifyOpenInvokeRequest(req, nonceCache, {
+      moduleId: "trovi",
+      urlScope: "status:read",
+      inputSchema,
+      directory,
+    });
+
+    expect(ctx.open).toBe(true);
+    expect(ctx.caller).toBe("foaf");
+    expect(ctx.input).toEqual({});
+    expect("grant" in ctx).toBe(false);
+    expect("subject" in ctx).toBe(false);
+  });
+
+  it("rejects invalid request signature", async () => {
+    const req = buildOpenRequest();
+    req.requesterSignature = "ed25519:invalid";
+
+    await expect(
+      verifyOpenInvokeRequest(req, nonceCache, {
+        moduleId: "trovi",
+        urlScope: "status:read",
+        inputSchema,
+        directory,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_request_signature" });
+  });
+
+  it("rejects replayed nonce", async () => {
+    const req = buildOpenRequest({ nonce: "fixed-open-nonce" });
+    const opts = {
+      moduleId: "trovi",
+      urlScope: "status:read",
+      inputSchema,
+      directory,
+    };
+    await verifyOpenInvokeRequest(req, nonceCache, opts);
+    await expect(verifyOpenInvokeRequest(req, nonceCache, opts)).rejects.toMatchObject({
+      code: "nonce_replayed",
+    });
+  });
+
+  it("rejects scope mismatch", async () => {
+    const req = buildOpenRequest({ scope: "other:scope" });
+    await expect(
+      verifyOpenInvokeRequest(req, nonceCache, {
+        moduleId: "trovi",
+        urlScope: "status:read",
+        inputSchema,
+        directory,
+      }),
+    ).rejects.toMatchObject({ code: "scope_mismatch" });
   });
 });

@@ -2,11 +2,13 @@ import type { z } from "zod";
 import { randomUUID } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import type { DirectoryClient } from "./directory.js";
-import type { SignedGrant, InvokeRequest } from "./envelope.js";
+import type { SignedGrant, InvokeRequest, OpenInvokeRequest } from "./envelope.js";
 import {
   InvokeRequestSchema,
+  OpenInvokeRequestSchema,
   sig1Payload,
   sig2Payload,
+  sig2OpenPayload,
 } from "./envelope.js";
 import { authError, infraError, ModuleError } from "./errors.js";
 import { verifyObject, parseSignature } from "./signing.js";
@@ -17,7 +19,8 @@ export const TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 /** Nonce cache TTL — slightly longer than timestamp window. */
 export const NONCE_TTL_MS = 6 * 60 * 1000;
 
-export interface VerifiedInvokeContext<I> {
+export interface VerifiedProtectedContext<I> {
+  open: false;
   subject: string;
   input: I;
   grant: SignedGrant;
@@ -26,6 +29,19 @@ export interface VerifiedInvokeContext<I> {
   requestId: string;
   dryRun: boolean;
 }
+
+export interface VerifiedOpenContext<I> {
+  open: true;
+  input: I;
+  caller: string;
+  scope: string;
+  requestId: string;
+  dryRun: boolean;
+}
+
+export type VerifiedInvokeContext<I> =
+  | VerifiedProtectedContext<I>
+  | VerifiedOpenContext<I>;
 
 export interface VerifyOptions {
   moduleId: string;
@@ -99,23 +115,47 @@ function verifyNonce(nonceCache: NonceCache, nonce: string): void {
   }
 }
 
-/** Step 4: Verify Sig 2 (requester). */
+/** Step 4: Verify Sig 2 (requester) for protected invokes. */
 async function verifyRequestSignature(
   req: InvokeRequest,
   directory: DirectoryClient,
 ): Promise<void> {
+  await verifyModuleSignature(
+    req.grant.grant.requester,
+    sig2Payload(req),
+    req.requesterSignature,
+    directory,
+  );
+}
+
+/** Verify Sig 2 for open-scope invokes. */
+async function verifyOpenRequestSignature(
+  req: OpenInvokeRequest,
+  directory: DirectoryClient,
+): Promise<void> {
+  await verifyModuleSignature(
+    req.requester,
+    sig2OpenPayload(req),
+    req.requesterSignature,
+    directory,
+  );
+}
+
+async function verifyModuleSignature(
+  requesterId: string,
+  payload: Record<string, unknown>,
+  signature: string,
+  directory: DirectoryClient,
+): Promise<void> {
   let requesterKey: KeyObject;
   try {
-    const parsed = parseSignature(req.requesterSignature);
-    requesterKey = await directory.getModuleKey(
-      req.grant.grant.requester,
-      parsed.keyId,
-    );
+    const parsed = parseSignature(signature);
+    requesterKey = await directory.getModuleKey(requesterId, parsed.keyId);
   } catch (err) {
     rethrowDirectoryError(err, "Unable to fetch requester public key");
   }
 
-  if (!verifyObject(sig2Payload(req), req.requesterSignature, requesterKey)) {
+  if (!verifyObject(payload, signature, requesterKey)) {
     throw authError("invalid_request_signature", "Request signature verification failed");
   }
 }
@@ -244,10 +284,59 @@ export async function verifyInvokeRequest<I>(
   const input = validatePayload<I>(req.payload, options.inputSchema);
 
   return {
+    open: false,
     subject: req.grant.grant.subject,
     input,
     grant: req.grant,
     caller: req.grant.grant.requester,
+    scope: options.urlScope,
+    requestId: options.requestId ?? randomUUID(),
+    dryRun: options.dryRun ?? false,
+  };
+}
+
+/** Step 1: Parse open invoke envelope. */
+function parseOpenEnvelope(rawBody: unknown): OpenInvokeRequest {
+  try {
+    return OpenInvokeRequestSchema.parse(rawBody);
+  } catch {
+    throw authError("malformed_request", "Request envelope is malformed");
+  }
+}
+
+/** Step 5 (open): Scope binding. */
+function verifyOpenBindings(req: OpenInvokeRequest, urlScope: string): void {
+  if (req.scope !== urlScope) {
+    throw authError("scope_mismatch", "Body scope does not match URL scope");
+  }
+}
+
+/**
+ * Holder verification for open scopes (5 steps):
+ * 1. Parse envelope
+ * 2. Timestamp within ±5 min
+ * 3. Nonce unseen
+ * 4. Verify Sig 2 (requester)
+ * 5. Scope binding + input schema
+ */
+export async function verifyOpenInvokeRequest<I>(
+  rawBody: unknown,
+  nonceCache: NonceCache,
+  options: VerifyOptions,
+): Promise<VerifiedOpenContext<I>> {
+  const req = parseOpenEnvelope(rawBody);
+
+  verifyTimestamp(req.timestamp);
+  verifyNonce(nonceCache, req.nonce);
+  await verifyOpenRequestSignature(req, options.directory);
+  verifyOpenBindings(req, options.urlScope);
+
+  const input = validatePayload<I>(req.payload, options.inputSchema);
+
+  return {
+    open: true,
+    input,
+    caller: req.requester,
     scope: options.urlScope,
     requestId: options.requestId ?? randomUUID(),
     dryRun: options.dryRun ?? false,

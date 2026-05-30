@@ -28,6 +28,17 @@ export interface InvokeRequest {
   requesterSignature: string;
 }
 
+/** Grant-free invoke envelope for open scopes (Sig 2 only). */
+export interface OpenInvokeRequest {
+  payload: unknown;
+  requester: string;
+  scope: string;
+  timestamp: string;
+  nonce: string;
+  /** Sig 2 — ed25519 over JCS({payload, requester, scope, timestamp, nonce}) */
+  requesterSignature: string;
+}
+
 export interface InvokeError {
   code: string;
   message: string;
@@ -69,6 +80,15 @@ export const InvokeRequestSchema = z.object({
   requesterSignature: z.string(),
 });
 
+export const OpenInvokeRequestSchema = z.object({
+  payload: z.unknown(),
+  requester: z.string(),
+  scope: z.string(),
+  timestamp: z.string(),
+  nonce: z.string(),
+  requesterSignature: z.string(),
+});
+
 export const InvokeErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
@@ -103,6 +123,28 @@ export function sig2Payload(req: InvokeRequest): {
     timestamp: req.timestamp,
     nonce: req.nonce,
   };
+}
+
+/** Object covered by Sig 2 for open-scope invokes (no grant). */
+export function sig2OpenPayload(req: OpenInvokeRequest): {
+  payload: unknown;
+  requester: string;
+  scope: string;
+  timestamp: string;
+  nonce: string;
+} {
+  return {
+    payload: req.payload,
+    requester: req.requester,
+    scope: req.scope,
+    timestamp: req.timestamp,
+    nonce: req.nonce,
+  };
+}
+
+/** True when the raw body looks like a protected (grant) invoke envelope. */
+export function isGrantInvokeBody(body: unknown): boolean {
+  return typeof body === "object" && body !== null && "grant" in body;
 }
 
 /** Object covered by Sig 3 (response minus holderSignature). */

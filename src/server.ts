@@ -4,10 +4,16 @@ import type { KeyObject } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import type { DirectoryClient } from "./directory.js";
 import type { InvokeResponse } from "./envelope.js";
-import { sig3Payload } from "./envelope.js";
+import { sig3Payload , isGrantInvokeBody } from "./envelope.js";
 import { normalizeError, ModuleError } from "./errors.js";
 import { signObject } from "./signing.js";
-import { verifyInvokeRequest, NonceCache, type VerifiedInvokeContext } from "./verify.js";
+import {
+  verifyInvokeRequest,
+  verifyOpenInvokeRequest,
+  NonceCache,
+  type VerifiedInvokeContext,
+  type VerifyOptions,
+} from "./verify.js";
 import { buildManifest, type ModuleManifest, type ScopeDefinition } from "./manifest.js";
 import { buildSignedChallenge } from "./challenge.js";
 import type { Ctx } from "./context.js";
@@ -139,16 +145,18 @@ export function createModuleServer(options: CreateServerOptions): Hono {
     const requestId = c.req.header("X-Request-Id") ?? randomUUID();
     const dryRun = c.req.header("X-Dry-Run") === "true";
 
+    const verifyOpts = {
+      moduleId: options.moduleId,
+      urlScope,
+      inputSchema: scopeDef.input,
+      directory: options.directory,
+      dryRun,
+      requestId,
+    };
+
     let verified: VerifiedInvokeContext<unknown>;
     try {
-      verified = await verifyInvokeRequest(rawBody, nonceCache, {
-        moduleId: options.moduleId,
-        urlScope,
-        inputSchema: scopeDef.input,
-        directory: options.directory,
-        dryRun,
-        requestId,
-      });
+      verified = await verifyInvokeForScope(rawBody, scopeDef, nonceCache, verifyOpts);
     } catch (err) {
       const normalized = err instanceof ModuleError ? err : authModuleError("verification_failed", "Verification failed");
       const status = normalized.retryable ? 503 : 401;
@@ -156,17 +164,7 @@ export function createModuleServer(options: CreateServerOptions): Hono {
     }
 
     try {
-      const ctx: Ctx<unknown> = {
-        subject: verified.subject,
-        input: verified.input,
-        grant: verified.grant,
-        caller: verified.caller,
-        scope: verified.scope,
-        requestId: verified.requestId,
-        dryRun: verified.dryRun,
-      };
-
-      const result = await scopeDef.handler(ctx);
+      const result = await scopeDef.handler(verified);
 
       const parsed = scopeDef.output.safeParse(result);
       if (!parsed.success) {
@@ -194,6 +192,30 @@ export function createModuleServer(options: CreateServerOptions): Hono {
   });
 
   return app;
+}
+
+async function verifyInvokeForScope(
+  rawBody: unknown,
+  scopeDef: Pick<ScopeDefinition, "open">,
+  nonceCache: NonceCache,
+  verifyOpts: VerifyOptions,
+): Promise<VerifiedInvokeContext<unknown>> {
+  if (scopeDef.open) {
+    if (isGrantInvokeBody(rawBody)) {
+      throw authModuleError(
+        "grant_not_expected",
+        "Open scope does not accept a grant envelope",
+      );
+    }
+    return verifyOpenInvokeRequest(rawBody, nonceCache, verifyOpts);
+  }
+  if (!isGrantInvokeBody(rawBody)) {
+    throw authModuleError(
+      "grant_required",
+      "Protected scope requires a grant envelope",
+    );
+  }
+  return verifyInvokeRequest(rawBody, nonceCache, verifyOpts);
 }
 
 function authModuleError(code: string, message: string): ModuleError {

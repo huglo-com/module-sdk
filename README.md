@@ -152,6 +152,54 @@ Any check failure produces a **signed error response**. Auth/permanent failures 
 
 **Fail-closed:** If a required key cannot be fetched (cache miss + Huglo unreachable), reject rather than serve.
 
+## Open scopes
+
+Some scopes do not require a subject grant. Register them with `open: true`:
+
+```typescript
+module.scope("status:read", {
+  open: true,
+  description: "Module status (no grant)",
+  input: z.object({}),
+  output: z.object({ status: z.string() }),
+  handler: async (ctx) => {
+    // ctx.open === true; no ctx.grant or ctx.subject
+    return { status: "ok" };
+  },
+});
+```
+
+The manifest includes `"open": true` on those scope entries so callers know grants are not needed.
+
+### Open invoke envelope
+
+```typescript
+interface OpenInvokeRequest {
+  payload: unknown;
+  requester: string;          // module id (Sig 2 key lookup)
+  scope: string;
+  timestamp: string;
+  nonce: string;
+  requesterSignature: string; // Sig 2 over JCS({ payload, requester, scope, timestamp, nonce })
+}
+```
+
+Open scopes still verify **Sig 2** (registered requester module) and use timestamp/nonce replay protection. They skip Sig 1, grant validity, constraints, and revocation.
+
+Sending a grant envelope to an open scope returns `grant_not_expected`. Sending an open envelope to a protected scope returns `grant_required`.
+
+### Open scope verification (holder)
+
+1. Parse open envelope
+2. Timestamp within ±5 minutes
+3. Nonce unseen
+4. Verify Sig 2 against `requester`
+5. Scope binding + input schema
+
+| Signature | Protected | Open |
+|-----------|-----------|------|
+| Sig 2 | `JCS({ payload, grant, scope, timestamp, nonce })` | `JCS({ payload, requester, scope, timestamp, nonce })` |
+
 ## Outbound calls
 
 ```typescript
@@ -159,12 +207,19 @@ const result = await module.call({
   target: "trovi",
   scope: "invoices:write",
   input: { vendor: "Acme", amount: 500, currency: "USD" },
-  grant: someSignedGrant,  // must name THIS module as requester
+  grant: someSignedGrant,  // required for protected scopes
   dryRun: false,           // optional
+});
+
+// Open scope (no grant; check manifest for open: true)
+const status = await module.call({
+  target: "trovi",
+  scope: "status:read",
+  input: {},
 });
 ```
 
-`module.call` resolves the target endpoint and public key from the directory, builds the request envelope, signs Sig 2, POSTs to `/invoke/:scope`, verifies Sig 3, matches `requestId`, and returns the result or throws a `ModuleError`.
+`module.call` resolves the target endpoint and public key from the directory, builds the request envelope (grant or open), signs Sig 2, POSTs to `/invoke/:scope`, verifies Sig 3, matches `requestId`, and returns the result or throws a `ModuleError`.
 
 ## Obtaining grants (invite flow)
 
@@ -227,15 +282,33 @@ You can still call `module.exchangeGrants(code)` manually if you use a custom ca
 
 ## Handler context
 
+Protected scopes:
+
 ```typescript
-interface Ctx<I> {
+// ctx.open === false
+{
+  open: false;
   subject: string;    // huglo:user:... (from verified grant)
-  input: I;           // validated payload (typed from Zod input schema)
   grant: SignedGrant;
-  caller: string;     // requester module id (from Sig 2)
+  caller: string;
+  input: I;
   scope: string;
   requestId: string;
-  dryRun: boolean;    // when true, compute but DO NOT commit side effects
+  dryRun: boolean;
+}
+```
+
+Open scopes:
+
+```typescript
+// ctx.open === true — no subject or grant
+{
+  open: true;
+  caller: string;
+  input: I;
+  scope: string;
+  requestId: string;
+  dryRun: boolean;
 }
 ```
 

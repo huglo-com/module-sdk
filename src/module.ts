@@ -65,6 +65,8 @@ export interface ModuleConfig {
 
 export interface ScopeOptions<I extends z.ZodType, O extends z.ZodType> {
   description: string;
+  /** When true, invoke does not require a grant (Sig 2 only). Default false. */
+  open?: boolean;
   input: I;
   output: O;
   handler: ScopeHandler<z.infer<I>, z.infer<O>>;
@@ -113,6 +115,7 @@ export class Module {
   ): this {
     this.scopes.set(name, {
       description: options.description,
+      open: options.open,
       input: options.input,
       output: options.output,
       handler: options.handler as ScopeHandler<unknown, unknown>,

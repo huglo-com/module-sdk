@@ -63,6 +63,18 @@ export async function createTestModules(): Promise<TestModules> {
     },
   });
 
+  holder.scope("status:read", {
+    open: true,
+    description: "Module status",
+    input: z.object({}),
+    output: z.object({ status: z.string() }),
+    handler: async (ctx) => {
+      handlerCalled = true;
+      expect(ctx.open).toBe(true);
+      return { status: "ok" };
+    },
+  });
+
   const requester = new Module({
     id: "foaf",
     name: "Foaf",
@@ -144,6 +156,40 @@ describe("integration", () => {
     });
 
     expect(result).toEqual({ id: "dry-run", vendor: "Dry Co", amount: 100 });
+  });
+
+  it("completes open scope call without grant", async () => {
+    const result = await testEnv.requester.call({
+      target: "trovi",
+      scope: "status:read",
+      input: {},
+    });
+    expect(result).toEqual({ status: "ok" });
+  });
+
+  it("rejects grant envelope on open scope", async () => {
+    const grant = testEnv.buildGrant({
+      grant_id: "g-open-reject",
+      scope: "status:read",
+    });
+    await expect(
+      testEnv.requester.call({
+        target: "trovi",
+        scope: "status:read",
+        input: {},
+        grant,
+      }),
+    ).rejects.toMatchObject({ code: "grant_not_expected" });
+  });
+
+  it("rejects open envelope on protected scope", async () => {
+    await expect(
+      testEnv.requester.call({
+        target: "trovi",
+        scope: "invoices:write",
+        input: { vendor: "X", amount: 1 },
+      }),
+    ).rejects.toMatchObject({ code: "grant_required" });
   });
 
   it("rejects tampered grant", async () => {
