@@ -1,4 +1,4 @@
-export { Module, ModuleError, DEFAULT_HUGLO_DIRECTORY_URL } from "./module.js";
+export { Module, ModuleError, DEFAULT_HUGLO_DIRECTORY_URL, exchangeAndSaveGrants } from "./module.js";
 export type {
   ModuleConfig,
   ScopeOptions,
@@ -7,6 +7,12 @@ export type {
   EmitterOptions,
   CallOptions,
   CreateInviteOptions,
+  GrantCallbackContext,
+  GrantCallbackErrorContext,
+  GrantCallbackResult,
+  GrantCallbackStage,
+  OnGrantCallback,
+  OnGrantCallbackError,
 } from "./module.js";
 export type { EmitterManifestEntry, EmitterDefinition } from "./manifest.js";
 export type { Ctx, ProtectedCtx, OpenCtx } from "./context.js";

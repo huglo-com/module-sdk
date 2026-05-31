@@ -5,6 +5,7 @@ import type { ModuleKeyPair } from "./keys.js";
 import type { DirectoryClient } from "./directory.js";
 import { HttpDirectoryClient } from "./directory.js";
 import type { ScopeDefinition, EmitterDefinition } from "./manifest.js";
+import type { GrantCallbackOptions } from "./grant-callback.js";
 import { createModuleServer, DEFAULT_CALLBACK_PATH, type ScopeHandler } from "./server.js";
 import { callScope, type CallOptions } from "./client.js";
 import { signObject } from "./signing.js";
@@ -40,7 +41,7 @@ function resolveDirectoryUrl(config: ModuleConfig): string {
   );
 }
 
-export interface ModuleConfig {
+export interface ModuleConfig extends GrantCallbackOptions {
   id: string;
   name: string;
   description: string;
@@ -58,11 +59,24 @@ export interface ModuleConfig {
   directory?: DirectoryClient;
   /** Optional path to static assets served at /assets/*. */
   assetsDir?: string;
-  /** Grant persistence for invite callback (enables GET /grant/callback by default). */
+  /** Grant persistence for invite callback (enables GET /grant/callback when set). */
   grantStore?: GrantStore;
-  /** Invite callback path when grantStore is set. Default: /grant/callback */
+  /**
+   * Invite callback path (default: /grant/callback). Controls the registered route
+   * and `getCallbackUrl()`.
+   */
   callbackPath?: string;
 }
+
+export type {
+  GrantCallbackContext,
+  GrantCallbackErrorContext,
+  GrantCallbackResult,
+  GrantCallbackStage,
+  OnGrantCallback,
+  OnGrantCallbackError,
+} from "./grant-callback.js";
+export { exchangeAndSaveGrants } from "./grant-callback.js";
 
 /** Protected scope (default): requires subject grant; handler receives subject + grant. */
 export interface ProtectedScopeOptions<I extends z.ZodType, O extends z.ZodType> {
@@ -239,6 +253,9 @@ export class Module {
       customRoutes: this.customRoutes,
       grantStore: this.config.grantStore,
       callbackPath: this.config.callbackPath,
+      onGrantCallback: this.config.onGrantCallback,
+      onGrantCallbackError: this.config.onGrantCallbackError,
+      callbackMiddleware: this.config.callbackMiddleware,
     });
     return this.app;
   }

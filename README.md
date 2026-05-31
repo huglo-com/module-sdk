@@ -60,7 +60,7 @@ A module can be holder in one call and requester in another. The SDK supports bo
 | `GET /health` | Health check |
 | `GET /manifest` | Module metadata, scopes (JSON Schema), public key |
 | `GET /.well-known/huglo-challenge` | Registration challenge response (signed) |
-| `GET /grant/callback` | Invite callback — exchanges code, saves grants (when `grantStore` is set) |
+| `GET /grant/callback` | Invite callback — exchanges code, saves grants (when `grantStore` or `onGrantCallback` is set) |
 | `POST /invoke/:scope` | Main entry — verified invoke |
 | `GET /assets/*` | Optional static assets (when `assetsDir` is configured) |
 | `ANY /api/*` | Optional custom routes (via `module.api(honoApp)`) |
@@ -290,7 +290,9 @@ const status = await module.call({
 
 ## Obtaining grants (invite flow)
 
-Before calling another module, the requester must obtain a `SignedGrant` from Huglo. Configure a `GrantStore` and the SDK serves `GET /grant/callback` automatically: it exchanges the code, saves grants via your store, and returns a page that closes the tab.
+Before calling another module, the requester must obtain a `SignedGrant` from Huglo. When you configure a `GrantStore` and/or `onGrantCallback`, the SDK registers `GET /grant/callback` at `callbackPath` (default `/grant/callback`). That path is also what `getCallbackUrl()` returns (`endpoint` + `callbackPath`).
+
+**Default behavior** (only `grantStore`, no hooks): the SDK exchanges the code, saves grants via your store, and returns a page that closes the tab.
 
 ```typescript
 import { Module, InMemoryGrantStore } from "@huglo/module-sdk";
@@ -301,12 +303,12 @@ const module = new Module({
   id: "trovi-test",
   // ...
   grantStore,
-  // callbackPath: "/grant/callback", // optional; this is the default
+  // callbackPath: "/grant/callback", // optional; default — also used by getCallbackUrl()
 });
 
 // 1. Create an invite (signed by this module)
 const { inviteUrl } = await module.createInvite({
-  callbackUrl: module.getCallbackUrl(), // endpoint + /grant/callback
+  callbackUrl: module.getCallbackUrl(), // endpoint + callbackPath
   scopes: [{ holder: "da", scope: "invoice:write" }],
   constraints: {}, // optional
 });
@@ -330,6 +332,51 @@ const result = await module.call({
 });
 ```
 
+### Custom callback behavior
+
+Use these options to keep the SDK route at `callbackPath` while customizing side effects, the response page, or route middleware — no need to wrap or replace the Hono app.
+
+| Option | Purpose |
+|--------|---------|
+| `onGrantCallback` | Runs **after** exchange (and save when `grantStore` is set). Return custom HTML/`Response`, or `void` for the default success page. |
+| `onGrantCallbackError` | Optional hook for missing `code`, exchange/save failures, or errors thrown from `onGrantCallback`. Return custom HTML/`Response`, or `void` for default error pages and status codes. |
+| `callbackMiddleware` | Hono middleware applied **only** to the callback route (e.g. CORS for a browser origin). |
+
+If you set `onGrantCallback` **without** `grantStore`, the route still registers: grants are exchanged and passed to your hook, but nothing is persisted (you save elsewhere in the hook).
+
+```typescript
+import { cors } from "hono/cors";
+import { Module, InMemoryGrantStore } from "@huglo/module-sdk";
+
+const module = new Module({
+  id: "trovi-test",
+  grantStore,
+  endpoint: "https://trovi.example",
+  callbackMiddleware: cors({ origin: "https://app.example.com" }),
+  onGrantCallback: async ({ code, grants, c }) => {
+    // Product-specific side effects after exchange + save
+    await markInstallActive(code, grants);
+
+    // Popup page that notifies the opener (e.g. SPA opened invite in a window)
+    return `<!DOCTYPE html>
+<html><body><script>
+  if (window.opener) {
+    window.opener.postMessage({ type: "huglo:grant", ok: true }, "https://app.example.com");
+    window.close();
+  }
+</script><p>Authorization complete.</p></body></html>`;
+  },
+  onGrantCallbackError: ({ stage, error, c }) => {
+    if (stage === "missing_code") {
+      return c.text("Missing code", 400);
+    }
+    // void → default HTML + status (400 missing code, 502 exchange/save, 500 render)
+  },
+});
+```
+
+For a fully custom handler outside the built-in route, use `exchangeAndSaveGrants(directory, grantStore, code)` (or `module.exchangeGrants(code)`) so you do not reimplement the exchange/save loop.
+
 ### GrantStore (developer implements)
 
 ```typescript
@@ -341,11 +388,9 @@ interface GrantStore {
 }
 ```
 
-The SDK calls `save` from the callback route. `find` / `list` / `delete` are for your application logic. `InMemoryGrantStore` is exported for dev and tests.
+The SDK calls `save` from the callback route when `grantStore` is configured. `find` / `list` / `delete` are for your application logic. `InMemoryGrantStore` is exported for dev and tests.
 
 The invite payload is signed with this module's Ed25519 private key (`JCS(payload)`). Huglo verifies the signature before issuing the `inviteUrl`.
-
-You can still call `module.exchangeGrants(code)` manually if you use a custom callback path without `grantStore`.
 
 ## Handler context
 

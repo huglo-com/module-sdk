@@ -1,9 +1,10 @@
 import { Hono } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
 import type { KeyObject } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import type { DirectoryClient } from "./directory.js";
-import type { InvokeResponse } from "./envelope.js";
+import type { InvokeResponse, SignedGrant } from "./envelope.js";
 import { sig3Payload , isGrantInvokeBody } from "./envelope.js";
 import { normalizeError, ModuleError } from "./errors.js";
 import { signObject } from "./signing.js";
@@ -19,6 +20,11 @@ import { buildSignedChallenge } from "./challenge.js";
 import type { Ctx, ProtectedCtx, OpenCtx } from "./context.js";
 import type { GrantStore } from "./store.js";
 import { grantCallbackHtml } from "./callback.js";
+import type {
+  GrantCallbackErrorContext,
+  OnGrantCallback,
+  OnGrantCallbackError,
+} from "./grant-callback.js";
 
 export const DEFAULT_CALLBACK_PATH = "/grant/callback";
 
@@ -38,6 +44,9 @@ export interface ServerConfig {
   customRoutes?: Hono;
   grantStore?: GrantStore;
   callbackPath?: string;
+  onGrantCallback?: OnGrantCallback;
+  onGrantCallbackError?: OnGrantCallbackError;
+  callbackMiddleware?: MiddlewareHandler | MiddlewareHandler[];
 }
 
 export type ProtectedScopeHandler<I, O> = (ctx: ProtectedCtx<I>) => Promise<O>;
@@ -91,28 +100,16 @@ export function createModuleServer(options: CreateServerOptions): Hono {
     app.use("/assets/*", serveStatic({ root: options.assetsDir }));
   }
 
-  if (options.grantStore) {
+  if (options.grantStore || options.onGrantCallback) {
     const callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
-    app.get(callbackPath, async (c) => {
-      const code = c.req.query("code");
-      if (!code) {
-        return c.html(grantCallbackHtml("Missing authorization code.", false), 400);
-      }
-      try {
-        const grants = await options.directory.exchangeGrants(code);
-        for (const grant of grants) {
-          await options.grantStore!.save(grant);
-        }
-      } catch {
-        return c.html(
-          grantCallbackHtml("Could not complete authorization.", false),
-          502,
-        );
-      }
-      return c.html(
-        grantCallbackHtml("Authorization complete. You can close this tab.", true),
-      );
-    });
+    const callbackMiddleware = normalizeMiddleware(options.callbackMiddleware);
+    const handler = createGrantCallbackHandler(options);
+    const callbackRoute = new Hono();
+    for (const middleware of callbackMiddleware) {
+      callbackRoute.use("*", middleware);
+    }
+    callbackRoute.get("/", handler);
+    app.route(callbackPath, callbackRoute);
   }
 
   if (options.customRoutes) {
@@ -197,6 +194,98 @@ export function createModuleServer(options: CreateServerOptions): Hono {
   });
 
   return app;
+}
+
+function normalizeMiddleware(
+  middleware: MiddlewareHandler | MiddlewareHandler[] | undefined,
+): MiddlewareHandler[] {
+  if (!middleware) {
+    return [];
+  }
+  return Array.isArray(middleware) ? middleware : [middleware];
+}
+
+function createGrantCallbackHandler(options: CreateServerOptions) {
+  return async (c: Context) => {
+    const code = c.req.query("code");
+    if (!code) {
+      return resolveGrantCallbackError(c, options.onGrantCallbackError, {
+        error: new Error("Missing authorization code"),
+        stage: "missing_code",
+      }, 400, grantCallbackHtml("Missing authorization code.", false));
+    }
+
+    let grants: SignedGrant[];
+    try {
+      grants = await options.directory.exchangeGrants(code);
+    } catch (err) {
+      return resolveGrantCallbackError(c, options.onGrantCallbackError, {
+        code,
+        error: err,
+        stage: "exchange",
+      }, 502, grantCallbackHtml("Could not complete authorization.", false));
+    }
+
+    if (options.grantStore) {
+      try {
+        for (const grant of grants) {
+          await options.grantStore.save(grant);
+        }
+      } catch (err) {
+        return resolveGrantCallbackError(c, options.onGrantCallbackError, {
+          code,
+          error: err,
+          stage: "save",
+        }, 502, grantCallbackHtml("Could not complete authorization.", false));
+      }
+    }
+
+    if (options.onGrantCallback) {
+      try {
+        const result = await options.onGrantCallback({ c, code, grants });
+        if (result !== undefined) {
+          return toGrantCallbackResponse(c, result, 200);
+        }
+      } catch (err) {
+        return resolveGrantCallbackError(c, options.onGrantCallbackError, {
+          code,
+          error: err,
+          stage: "render",
+        }, 500, grantCallbackHtml("Could not complete authorization.", false));
+      }
+    }
+
+    return c.html(
+      grantCallbackHtml("Authorization complete. You can close this tab.", true),
+    );
+  };
+}
+
+async function resolveGrantCallbackError(
+  c: Context,
+  onError: OnGrantCallbackError | undefined,
+  ctx: Omit<GrantCallbackErrorContext, "c">,
+  defaultStatus: number,
+  defaultHtml: string,
+): Promise<Response> {
+  if (onError) {
+    const result = await onError({ c, ...ctx });
+    if (result !== undefined) {
+      return toGrantCallbackResponse(c, result, defaultStatus);
+    }
+  }
+  return c.html(defaultHtml, defaultStatus as 400 | 500 | 502);
+}
+
+function toGrantCallbackResponse(
+  c: Context,
+  result: Response | string,
+  defaultStatus: number,
+): Response {
+  if (typeof result === "string") {
+    return c.html(result, defaultStatus as 200 | 400 | 500 | 502);
+  }
+  return result;
 }
 
 async function verifyInvokeForScope(
