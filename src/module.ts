@@ -4,7 +4,7 @@ import type { z } from "zod";
 import type { ModuleKeyPair } from "./keys.js";
 import type { DirectoryClient } from "./directory.js";
 import { HttpDirectoryClient } from "./directory.js";
-import type { ScopeDefinition } from "./manifest.js";
+import type { ScopeDefinition, EmitterDefinition } from "./manifest.js";
 import { createModuleServer, DEFAULT_CALLBACK_PATH, type ScopeHandler } from "./server.js";
 import { callScope, type CallOptions } from "./client.js";
 import { signObject } from "./signing.js";
@@ -86,6 +86,11 @@ export type ScopeOptions<I extends z.ZodType, O extends z.ZodType> =
   | ProtectedScopeOptions<I, O>
   | OpenScopeOptions<I, O>;
 
+export interface EmitterOptions<O extends z.ZodType> {
+  description: string;
+  output: O;
+}
+
 export interface CreateInviteOptions {
   callbackUrl: string;
   scopes: InviteScopeRequest[];
@@ -102,6 +107,7 @@ export class Module {
   private readonly config: ModuleConfig;
   private readonly directory: DirectoryClient;
   private readonly scopes = new Map<string, RegisteredScope<z.ZodType, z.ZodType>>();
+  private readonly emitters = new Map<string, EmitterDefinition>();
   private app: Hono | null = null;
   private server: ReturnType<typeof serve> | null = null;
   customRoutes: Hono | undefined;
@@ -145,6 +151,35 @@ export class Module {
       handler: options.handler as ScopeHandler<unknown, unknown>,
     });
     return this;
+  }
+
+  /**
+   * Register an emitter — a named outbound event with a declared output schema.
+   * Published in the manifest; use emit() to validate data and call a subscriber scope.
+   */
+  emitter<O extends z.ZodType>(name: string, options: EmitterOptions<O>): this {
+    this.emitters.set(name, {
+      description: options.description,
+      output: options.output,
+    });
+    return this;
+  }
+
+  /**
+   * Validate data against an emitter's output schema and call the grant's holder scope.
+   */
+  async emit(name: string, data: unknown, grant: SignedGrant): Promise<unknown> {
+    const def = this.emitters.get(name);
+    if (!def) {
+      throw new Error(`Unknown emitter: ${name}`);
+    }
+    const event = def.output.parse(data);
+    return this.call({
+      target: grant.grant.holder,
+      scope: grant.grant.scope,
+      input: event,
+      grant,
+    });
   }
 
   /** Attach custom routes mounted at /api/*. */
@@ -197,6 +232,7 @@ export class Module {
       privateKey: this.config.keyPair.privateKey,
       directory: this.directory,
       scopes: this.scopes,
+      emitters: this.emitters,
       challenge: this.config.challenge,
       endpoint: this.config.endpoint,
       assetsDir: this.config.assetsDir,

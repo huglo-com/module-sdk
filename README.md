@@ -200,6 +200,73 @@ Sending a grant envelope to an open scope returns `grant_not_expected`. Sending 
 |-----------|-----------|------|
 | Sig 2 | `JCS({ payload, grant, scope, timestamp, nonce })` | `JCS({ payload, requester, scope, timestamp, nonce })` |
 
+## Emitters
+
+An **emitter** is the outbound counterpart to a scope. Scopes are inbound (others call you); emitters are outbound (you call another module when an event occurs). An emitter declares an **output-only** schema — the payload shape subscribers receive.
+
+The manifest includes an `emitters` array alongside `scopes`:
+
+```typescript
+interface EmitterManifestEntry {
+  name: string;
+  description: string;
+  output: Record<string, unknown>;  // JSON Schema
+}
+```
+
+### Declaring an emitter (module B)
+
+Define the output schema once, then register the emitter:
+
+```typescript
+const EmailReceived = z.object({
+  sender: z.string(),
+  recipient: z.string(),
+  subject: z.string(),
+  body: z.string(),
+});
+
+moduleB.emitter("email.received", {
+  description: "Fires when an email is received",
+  output: EmailReceived,
+});
+```
+
+This publishes the format in module B's `GET /manifest` under `emitters`, so module A knows exactly what it will receive.
+
+### Receiving module (module A)
+
+Module A implements a normal scope whose `input` matches the emitter's `output`:
+
+```typescript
+moduleA.scope("on-email", {
+  description: "Handle an email event from module B",
+  input: EmailReceived,
+  output: z.object({ ok: z.boolean() }),
+  handler: async (ctx) => {
+    // ctx.input is the validated email event
+    return { ok: true };
+  },
+});
+```
+
+### Firing an emitter
+
+When the event occurs, validate against the declared schema and call the subscriber via the grant:
+
+```typescript
+const grant = await grantStore.find({
+  subject: "huglo:user:abc123",  // flow owner who authorized B → A
+  holder: "module-a",
+  scope: "on-email",
+  requester: moduleB.id,
+});
+
+await moduleB.emit("email.received", emailData, grant);
+```
+
+`emit(name, data, grant)` parses `data` against the emitter's output schema (same as the manifest), then performs a signed `module.call` to `grant.grant.holder` / `grant.grant.scope` with the validated payload. The grant supplies target module, scope, and subject; obtain it from your `GrantStore` after the user approves via the invite flow.
+
 ## Outbound calls
 
 ```typescript

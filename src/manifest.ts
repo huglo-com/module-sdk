@@ -9,6 +9,12 @@ export interface ScopeManifestEntry {
   output: Record<string, unknown>;
 }
 
+export interface EmitterManifestEntry {
+  name: string;
+  description: string;
+  output: Record<string, unknown>;
+}
+
 export interface ModuleManifest {
   id: string;
   name: string;
@@ -16,6 +22,7 @@ export interface ModuleManifest {
   version: string;
   publicKey: string;
   scopes: ScopeManifestEntry[];
+  emitters: EmitterManifestEntry[];
 }
 
 export interface ScopeDefinition {
@@ -23,6 +30,11 @@ export interface ScopeDefinition {
   /** When true, invoke does not require a grant (Sig 2 only). Default false. */
   open?: boolean;
   input: z.ZodType;
+  output: z.ZodType;
+}
+
+export interface EmitterDefinition {
+  description: string;
   output: z.ZodType;
 }
 
@@ -35,6 +47,7 @@ export function buildManifest(
     publicKey: string;
   },
   scopes: Map<string, ScopeDefinition>,
+  emitters: Map<string, EmitterDefinition> = new Map(),
 ): ModuleManifest {
   const scopeEntries: ScopeManifestEntry[] = [];
   for (const [name, def] of scopes) {
@@ -49,6 +62,14 @@ export function buildManifest(
     }
     scopeEntries.push(entry);
   }
+  const emitterEntries: EmitterManifestEntry[] = [];
+  for (const [name, def] of emitters) {
+    emitterEntries.push({
+      name,
+      description: def.description,
+      output: z.toJSONSchema(def.output, { io: "output" }) as Record<string, unknown>,
+    });
+  }
   return {
     id: config.id,
     name: config.name,
@@ -56,5 +77,6 @@ export function buildManifest(
     version: config.version,
     publicKey: config.publicKey,
     scopes: scopeEntries,
+    emitters: emitterEntries,
   };
 }

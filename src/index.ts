@@ -4,9 +4,11 @@ export type {
   ScopeOptions,
   ProtectedScopeOptions,
   OpenScopeOptions,
+  EmitterOptions,
   CallOptions,
   CreateInviteOptions,
 } from "./module.js";
+export type { EmitterManifestEntry, EmitterDefinition } from "./manifest.js";
 export type { Ctx, ProtectedCtx, OpenCtx } from "./context.js";
 export type {
   SignedGrant,
