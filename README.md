@@ -282,10 +282,12 @@ You can still call `module.exchangeGrants(code)` manually if you use a custom ca
 
 ## Handler context
 
+Handler `ctx` is typed from the scope kind. Protected scopes (default) use `ProtectedCtx<I>`; open scopes use `OpenCtx<I>`.
+
 Protected scopes:
 
 ```typescript
-// ctx.open === false
+// ProtectedCtx<I> — default when open is omitted
 {
   open: false;
   subject: string;    // huglo:user:... (from verified grant)
@@ -298,10 +300,10 @@ Protected scopes:
 }
 ```
 
-Open scopes:
+Open scopes (`open: true`):
 
 ```typescript
-// ctx.open === true — no subject or grant
+// OpenCtx<I> — no subject or grant
 {
   open: true;
   caller: string;

@@ -1,5 +1,12 @@
 export { Module, ModuleError, DEFAULT_HUGLO_DIRECTORY_URL } from "./module.js";
-export type { ModuleConfig, ScopeOptions, CallOptions, CreateInviteOptions } from "./module.js";
+export type {
+  ModuleConfig,
+  ScopeOptions,
+  ProtectedScopeOptions,
+  OpenScopeOptions,
+  CallOptions,
+  CreateInviteOptions,
+} from "./module.js";
 export type { Ctx, ProtectedCtx, OpenCtx } from "./context.js";
 export type {
   SignedGrant,

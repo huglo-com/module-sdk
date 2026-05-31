@@ -16,7 +16,7 @@ import {
 } from "./verify.js";
 import { buildManifest, type ModuleManifest, type ScopeDefinition } from "./manifest.js";
 import { buildSignedChallenge } from "./challenge.js";
-import type { Ctx } from "./context.js";
+import type { Ctx, ProtectedCtx, OpenCtx } from "./context.js";
 import type { GrantStore } from "./store.js";
 import { grantCallbackHtml } from "./callback.js";
 
@@ -39,6 +39,9 @@ export interface ServerConfig {
   callbackPath?: string;
 }
 
+export type ProtectedScopeHandler<I, O> = (ctx: ProtectedCtx<I>) => Promise<O>;
+export type OpenScopeHandler<I, O> = (ctx: OpenCtx<I>) => Promise<O>;
+/** Internal runtime handler (protected or open invoke). */
 export type ScopeHandler<I, O> = (ctx: Ctx<I>) => Promise<O>;
 
 export interface CreateServerOptions extends ServerConfig {

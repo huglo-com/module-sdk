@@ -9,6 +9,7 @@ import { createModuleServer, DEFAULT_CALLBACK_PATH, type ScopeHandler } from "./
 import { callScope, type CallOptions } from "./client.js";
 import { signObject } from "./signing.js";
 import type { GrantStore } from "./store.js";
+import type { ProtectedCtx, OpenCtx } from "./context.js";
 import type {
   CreateInviteResponse,
   InviteScopeRequest,
@@ -16,7 +17,7 @@ import type {
 } from "./envelope.js";
 
 export { ModuleError } from "./errors.js";
-export type { Ctx } from "./context.js";
+export type { Ctx, ProtectedCtx, OpenCtx } from "./context.js";
 export type { SignedGrant, InvokeRequest, InvokeResponse } from "./envelope.js";
 export type {
   InvitePayload,
@@ -63,14 +64,27 @@ export interface ModuleConfig {
   callbackPath?: string;
 }
 
-export interface ScopeOptions<I extends z.ZodType, O extends z.ZodType> {
+/** Protected scope (default): requires subject grant; handler receives subject + grant. */
+export interface ProtectedScopeOptions<I extends z.ZodType, O extends z.ZodType> {
   description: string;
-  /** When true, invoke does not require a grant (Sig 2 only). Default false. */
-  open?: boolean;
+  open?: false;
   input: I;
   output: O;
-  handler: ScopeHandler<z.infer<I>, z.infer<O>>;
+  handler: (ctx: ProtectedCtx<z.infer<I>>) => Promise<z.infer<O>>;
 }
+
+/** Open scope: Sig 2 only; no subject or grant in handler context. */
+export interface OpenScopeOptions<I extends z.ZodType, O extends z.ZodType> {
+  description: string;
+  open: true;
+  input: I;
+  output: O;
+  handler: (ctx: OpenCtx<z.infer<I>>) => Promise<z.infer<O>>;
+}
+
+export type ScopeOptions<I extends z.ZodType, O extends z.ZodType> =
+  | ProtectedScopeOptions<I, O>
+  | OpenScopeOptions<I, O>;
 
 export interface CreateInviteOptions {
   callbackUrl: string;
@@ -106,9 +120,19 @@ export class Module {
   }
 
   /**
-   * Register a scope handler.
-   * Input type is inferred from the Zod input schema.
+   * Register a protected scope handler (default). Requires a subject grant on invoke.
    */
+  scope<I extends z.ZodType, O extends z.ZodType>(
+    name: string,
+    options: ProtectedScopeOptions<I, O>,
+  ): this;
+  /**
+   * Register an open scope handler. No grant; authenticated requester module only.
+   */
+  scope<I extends z.ZodType, O extends z.ZodType>(
+    name: string,
+    options: OpenScopeOptions<I, O>,
+  ): this;
   scope<I extends z.ZodType, O extends z.ZodType>(
     name: string,
     options: ScopeOptions<I, O>,
