@@ -6,9 +6,18 @@ import type { DirectoryClient } from "./directory.js";
 import { HttpDirectoryClient } from "./directory.js";
 import type { ScopeDefinition, EmitterDefinition } from "./manifest.js";
 import type { GrantCallbackOptions } from "./grant-callback.js";
-import { createModuleServer, DEFAULT_CALLBACK_PATH, type ScopeHandler } from "./server.js";
+import {
+  createModuleServer,
+  DEFAULT_CALLBACK_PATH,
+  DEFAULT_GRANT_INIT_PATH,
+  grantInitPath,
+  type ScopeHandler,
+} from "./server.js";
 import { callScope, type CallOptions } from "./client.js";
-import { signObject } from "./signing.js";
+import {
+  buildGrantCallbackUrl,
+  createSignedInvite,
+} from "./grant-callback.js";
 import type { GrantStore } from "./store.js";
 import type { ConfigStore } from "./config-store.js";
 import { InMemoryConfigStore } from "./config-store.js";
@@ -23,6 +32,13 @@ import {
 import type { OnConfigSaved } from "./config-routes.js";
 import { DEFAULT_CONFIG_PATH } from "./config-routes.js";
 import type { ConfigPageTheme } from "./config-page.js";
+import type { FileStore } from "./file-store.js";
+import { InMemoryFileStore } from "./file-store.js";
+import {
+  createFileRecord,
+  type CreateFileOptions,
+  type File,
+} from "./file.js";
 import type {
   CreateInviteResponse,
   InviteScopeRequest,
@@ -64,6 +80,16 @@ export type { OAuthPkceParams } from "./oauth.js";
 export type { OnConfigSaved, OnConfigSavedContext } from "./config-routes.js";
 export { DEFAULT_CONFIG_PATH } from "./config-routes.js";
 export type { ConfigPageTheme } from "./config-page.js";
+export type { FileStore, StoredFile } from "./file-store.js";
+export { InMemoryFileStore } from "./file-store.js";
+export {
+  FileSchema,
+  type File,
+  type CreateFileOptions,
+  type CreateFileDataOptions,
+  type CreateFileUrlOptions,
+  DEFAULT_MAX_FILE_BYTES,
+} from "./file.js";
 export { loadKeyPair, generateKeyPair } from "./keys.js";
 
 /** Production Huglo directory URL used when none is configured. */
@@ -116,6 +142,8 @@ export interface ModuleConfig extends GrantCallbackOptions {
   theme?: ConfigPageTheme;
   /** Hook after config intake saves an instance (provisioning, grant invites, etc.). */
   onConfigSaved?: OnConfigSaved;
+  /** Ephemeral file persistence (defaults to in-memory when using createFile()). */
+  fileStore?: FileStore;
 }
 
 export type {
@@ -126,7 +154,17 @@ export type {
   OnGrantCallback,
   OnGrantCallbackError,
 } from "./grant-callback.js";
-export { exchangeAndSaveGrants } from "./grant-callback.js";
+export {
+  exchangeAndSaveGrants,
+  buildGrantCallbackUrl,
+  createSignedInvite,
+} from "./grant-callback.js";
+export { grantAuthorizedNotifyHtml } from "./callback.js";
+export {
+  DEFAULT_CALLBACK_PATH,
+  DEFAULT_GRANT_INIT_PATH,
+  grantInitPath,
+} from "./server.js";
 
 /** Protected scope (default): requires subject grant; handler receives subject + grant. */
 export interface ProtectedScopeOptions<I extends z.ZodType, O extends z.ZodType> {
@@ -174,6 +212,7 @@ export class Module {
   private readonly emitters = new Map<string, EmitterDefinition>();
   private configDefinition: ConfigDefinition | undefined;
   private defaultConfigStore: ConfigStore | undefined;
+  private defaultFileStore: InMemoryFileStore | undefined;
   private app: Hono | null = null;
   private server: ReturnType<typeof serve> | null = null;
   customRoutes: Hono | undefined;
@@ -246,6 +285,30 @@ export class Module {
     return this.init.configStore ?? (this.configDefinition ? this.resolveConfigStore() : undefined);
   }
 
+  /** Expose the file store (for tests and custom FileStore implementations). */
+  getFileStore(): FileStore {
+    return this.resolveFileStore();
+  }
+
+  /**
+   * Store a short-lived file and return public metadata including a download URL.
+   * Requires MODULE_ENDPOINT or config.endpoint.
+   */
+  async createFile(options: CreateFileOptions): Promise<File> {
+    const hadDefault = this.defaultFileStore !== undefined;
+    const store = this.resolveFileStore();
+    if (!hadDefault && this.defaultFileStore && !this.init.fileStore) {
+      this.app = null;
+    }
+
+    const endpoint = this.init.endpoint?.replace(/\/$/, "");
+    if (!endpoint) {
+      throw new Error("MODULE_ENDPOINT or config.endpoint is required for createFile()");
+    }
+
+    return createFileRecord(store, endpoint, options);
+  }
+
   /**
    * Validate data against an emitter's output schema and call the grant's holder scope.
    */
@@ -286,15 +349,12 @@ export class Module {
    * the user must open in a browser to approve.
    */
   async createInvite(options: CreateInviteOptions): Promise<CreateInviteResponse> {
-    const payload = {
-      moduleId: this.id,
-      callbackUrl: options.callbackUrl,
-      scopes: options.scopes,
-      constraints: options.constraints ?? {},
-      iat: new Date().toISOString(),
-    };
-    const signature = signObject(payload, this.init.keyPair.privateKey);
-    return this.directory.createInvite(this.id, { payload, signature });
+    return createSignedInvite(
+      this.directory,
+      this.id,
+      this.init.keyPair.privateKey,
+      options,
+    );
   }
 
   /** Exchange a single-use code from the invite callback for signed grants. */
@@ -332,8 +392,27 @@ export class Module {
       configPageUrl: this.init.configPageUrl,
       configTheme: this.init.theme,
       onConfigSaved: this.init.onConfigSaved,
+      fileStore: this.getFileStoreForServer(),
     });
     return this.app;
+  }
+
+  private resolveFileStore(): FileStore {
+    if (this.init.fileStore) {
+      return this.init.fileStore;
+    }
+    this.defaultFileStore ??= new InMemoryFileStore();
+    return this.defaultFileStore;
+  }
+
+  private getFileStoreForServer(): FileStore | undefined {
+    if (this.init.fileStore) {
+      return this.init.fileStore;
+    }
+    if (this.defaultFileStore) {
+      return this.defaultFileStore;
+    }
+    return undefined;
   }
 
   private resolveConfigStore(): ConfigStore {
@@ -388,18 +467,22 @@ export class Module {
     if (!endpoint) {
       throw new Error("MODULE_ENDPOINT or config.endpoint is required for getCallbackUrl()");
     }
-    const path = this.init.callbackPath ?? DEFAULT_CALLBACK_PATH;
-    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-    return `${endpoint}${normalizedPath}`;
+    return buildGrantCallbackUrl(endpoint, this.init.callbackPath ?? DEFAULT_CALLBACK_PATH);
   }
 
   /** Start listening on the given port. */
   listen(port: number, host = "0.0.0.0"): Promise<void> {
-    const app = this.getApp();
     return new Promise((resolve) => {
-      this.server = serve({ fetch: app.fetch, port, hostname: host }, () => {
-        resolve();
-      });
+      this.server = serve(
+        {
+          fetch: (req, env) => this.getApp().fetch(req, env),
+          port,
+          hostname: host,
+        },
+        () => {
+          resolve();
+        },
+      );
     });
   }
 

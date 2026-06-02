@@ -1,0 +1,179 @@
+import { randomBytes } from "node:crypto";
+import { z } from "zod";
+import type { FileStore } from "./file-store.js";
+
+export const FileSchema = z.object({
+  url: z.string().min(1),
+  content_type: z.string().min(1),
+  filename: z.string().min(1),
+  size: z.number().int().nonnegative(),
+  expires_at: z.iso.datetime(),
+});
+
+export type File = z.infer<typeof FileSchema>;
+
+export const DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+export type CreateFileDataOptions = {
+  data: Buffer | Uint8Array;
+  content_type: string;
+  filename: string;
+  expires_at: Date | string;
+};
+
+export type CreateFileUrlOptions = {
+  url: string;
+  expires_at: Date | string;
+  content_type?: string;
+  filename?: string;
+  maxBytes?: number;
+};
+
+export type CreateFileOptions = CreateFileDataOptions | CreateFileUrlOptions;
+
+export type FetchFn = typeof globalThis.fetch;
+
+function normalizeExpiresAt(expires_at: Date | string): string {
+  const iso =
+    expires_at instanceof Date ? expires_at.toISOString() : new Date(expires_at).toISOString();
+  if (Number.isNaN(Date.parse(iso))) {
+    throw new Error("Invalid expires_at");
+  }
+  if (Date.parse(iso) <= Date.now()) {
+    throw new Error("expires_at must be in the future");
+  }
+  return iso;
+}
+
+function generateToken(): string {
+  return randomBytes(16).toString("base64url");
+}
+
+function filenameFromUrl(url: string): string {
+  try {
+    const pathname = new URL(url).pathname;
+    const base = pathname.split("/").pop();
+    if (base) {
+      return base;
+    }
+  } catch {
+    // fall through
+  }
+  return "download";
+}
+
+function filenameFromContentDisposition(header: string | null): string | undefined {
+  if (!header) {
+    return undefined;
+  }
+  const match = /filename\*?=(?:UTF-8''|")?([^";\n]+)/i.exec(header);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(match[1].replace(/"/g, "").trim());
+  } catch {
+    return match[1].replace(/"/g, "").trim();
+  }
+}
+
+function contentDispositionFilename(filename: string): string {
+  if (/^[\x20-\x7E]+$/.test(filename)) {
+    return filename.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  }
+  return "download";
+}
+
+async function loadFromUrl(
+  url: string,
+  fetchFn: FetchFn,
+  maxBytes: number,
+  overrides: { content_type?: string; filename?: string },
+): Promise<{ body: Uint8Array; content_type: string; filename: string; size: number }> {
+  const response = await fetchFn(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch file URL: ${response.status}`);
+  }
+
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null && Number(contentLength) > maxBytes) {
+    throw new Error(`File exceeds maxBytes (${maxBytes})`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  if (arrayBuffer.byteLength > maxBytes) {
+    throw new Error(`File exceeds maxBytes (${maxBytes})`);
+  }
+
+  const body = new Uint8Array(arrayBuffer);
+  const content_type =
+    overrides.content_type ??
+    response.headers.get("content-type")?.split(";")[0]?.trim() ??
+    "application/octet-stream";
+  const filename =
+    overrides.filename ??
+    filenameFromContentDisposition(response.headers.get("content-disposition")) ??
+    filenameFromUrl(url);
+
+  return { body, content_type, filename, size: body.byteLength };
+}
+
+export interface CreateFileRecordOptions {
+  fetch?: FetchFn;
+}
+
+export async function createFileRecord(
+  store: FileStore,
+  endpoint: string,
+  options: CreateFileOptions,
+  recordOptions: CreateFileRecordOptions = {},
+): Promise<File> {
+  const expires_at = normalizeExpiresAt(options.expires_at);
+  const fetchFn = recordOptions.fetch ?? globalThis.fetch;
+
+  let body: Uint8Array;
+  let content_type: string;
+  let filename: string;
+  let size: number;
+
+  if ("data" in options) {
+    body = options.data instanceof Uint8Array ? options.data : new Uint8Array(options.data);
+    content_type = options.content_type;
+    filename = options.filename;
+    size = body.byteLength;
+  } else if ("url" in options) {
+    const loaded = await loadFromUrl(
+      options.url,
+      fetchFn,
+      options.maxBytes ?? DEFAULT_MAX_FILE_BYTES,
+      { content_type: options.content_type, filename: options.filename },
+    );
+    body = loaded.body;
+    content_type = loaded.content_type;
+    filename = loaded.filename;
+    size = loaded.size;
+  } else {
+    throw new Error("createFile requires either data or url");
+  }
+
+  const token = generateToken();
+  await store.put({
+    token,
+    body,
+    content_type,
+    filename,
+    size,
+    expires_at,
+  });
+
+  const base = endpoint.replace(/\/$/, "");
+  return FileSchema.parse({
+    url: `${base}/file/${token}`,
+    content_type,
+    filename,
+    size,
+    expires_at,
+  });
+}
+
+export { contentDispositionFilename };

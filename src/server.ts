@@ -19,19 +19,35 @@ import { buildManifest, type ModuleManifest, type ScopeDefinition, type EmitterD
 import { buildSignedChallenge } from "./challenge.js";
 import type { Ctx, ProtectedCtx, OpenCtx } from "./context.js";
 import type { GrantStore } from "./store.js";
-import { grantCallbackHtml } from "./callback.js";
+import { grantAuthorizedNotifyHtml, grantCallbackHtml } from "./callback.js";
 import type {
   GrantCallbackErrorContext,
   OnGrantCallback,
   OnGrantCallbackError,
+} from "./grant-callback.js";
+import {
+  buildGrantCallbackUrl,
+  createSignedInvite,
 } from "./grant-callback.js";
 import type { ConfigDefinition } from "./config.js";
 import type { ConfigStore } from "./config-store.js";
 import { mountConfigRoutes, type OnConfigSaved } from "./config-routes.js";
 import type { ConfigPageTheme } from "./config-page.js";
 import type { HugloOAuthClient, OAuthClientOptions } from "./oauth.js";
+import type { FileStore } from "./file-store.js";
+import { mountFileRoutes } from "./file-routes.js";
 
 export const DEFAULT_CALLBACK_PATH = "/grant/callback";
+export const DEFAULT_GRANT_INIT_PATH = "/grant/init";
+
+/** Derive grant init path from callback path (e.g. /grant/callback → /grant/init). */
+export function grantInitPath(callbackPath: string): string {
+  const normalized = callbackPath.replace(/\/$/, "");
+  if (normalized.endsWith("/callback")) {
+    return `${normalized.slice(0, -"/callback".length)}/init`;
+  }
+  return DEFAULT_GRANT_INIT_PATH;
+}
 
 export interface ServerConfig {
   moduleId: string;
@@ -60,6 +76,7 @@ export interface ServerConfig {
   configPageUrl?: string;
   configTheme?: ConfigPageTheme;
   onConfigSaved?: OnConfigSaved;
+  fileStore?: FileStore;
 }
 
 export type ProtectedScopeHandler<I, O> = (ctx: ProtectedCtx<I>) => Promise<O>;
@@ -115,6 +132,11 @@ export function createModuleServer(options: CreateServerOptions): Hono {
     app.use("/assets/*", serveStatic({ root: options.assetsDir }));
   }
 
+  if (options.grantStore) {
+    const callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
+    app.get(grantInitPath(callbackPath), createGrantInitHandler(options));
+  }
+
   if (options.grantStore || options.onGrantCallback) {
     const callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
     const callbackMiddleware = normalizeMiddleware(options.callbackMiddleware);
@@ -129,6 +151,10 @@ export function createModuleServer(options: CreateServerOptions): Hono {
 
   if (options.customRoutes) {
     app.route("/api", options.customRoutes);
+  }
+
+  if (options.fileStore) {
+    mountFileRoutes(app, { fileStore: options.fileStore });
   }
 
   if (
@@ -288,9 +314,76 @@ function createGrantCallbackHandler(options: CreateServerOptions) {
       }
     }
 
+    const first = grants[0]?.grant;
+    if (first) {
+      return c.html(
+        grantAuthorizedNotifyHtml({
+          subject: first.subject,
+          holder: first.holder,
+          scope: first.scope,
+        }),
+      );
+    }
+
     return c.html(
       grantCallbackHtml("Authorization complete. You can close this tab.", true),
     );
+  };
+}
+
+function createGrantInitHandler(options: CreateServerOptions) {
+  return async (c: Context) => {
+    const subject = c.req.query("subject");
+    const holder = c.req.query("holder");
+    const scope = c.req.query("scope");
+
+    if (!subject || !holder || !scope) {
+      return c.text("Missing subject, holder, or scope query parameter", 400);
+    }
+
+    const grantStore = options.grantStore;
+    if (!grantStore) {
+      return c.text("Grant store not configured", 503);
+    }
+
+    const existing = await grantStore.find({
+      subject,
+      holder,
+      scope,
+      requester: options.moduleId,
+    });
+
+    if (existing) {
+      return c.html(
+        grantAuthorizedNotifyHtml({ subject, holder, scope }),
+      );
+    }
+
+    const endpoint = options.endpoint?.replace(/\/$/, "");
+    if (!endpoint) {
+      return c.text("Module endpoint not configured", 503);
+    }
+
+    const callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
+    const callbackUrl = buildGrantCallbackUrl(endpoint, callbackPath);
+
+    try {
+      const { inviteUrl } = await createSignedInvite(
+        options.directory,
+        options.moduleId,
+        options.privateKey,
+        {
+          callbackUrl,
+          scopes: [{ holder, scope }],
+        },
+      );
+      return c.redirect(inviteUrl);
+    } catch {
+      return c.html(
+        grantCallbackHtml("Could not start authorization.", false),
+        502,
+      );
+    }
   };
 }
 

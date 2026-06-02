@@ -60,9 +60,11 @@ A module can be holder in one call and requester in another. The SDK supports bo
 | `GET /health` | Health check |
 | `GET /manifest` | Module metadata, scopes (JSON Schema), public key |
 | `GET /.well-known/huglo-challenge` | Registration challenge response (signed) |
+| `GET /grant/init` | Grant check / invite redirect (when `grantStore` is set); query: `subject`, `holder`, `scope` |
 | `GET /grant/callback` | Invite callback — exchanges code, saves grants (when `grantStore` or `onGrantCallback` is set) |
 | `POST /invoke/:scope` | Main entry — verified invoke |
 | `GET /assets/*` | Optional static assets (when `assetsDir` is configured) |
+| `GET /file/:token` | Public ephemeral file download (when `fileStore` is configured or after first `createFile()`) |
 | `ANY /api/*` | Optional custom routes (via `module.api(honoApp)`) |
 
 ## Wire protocol — `POST /invoke/:scope`
@@ -292,7 +294,30 @@ const status = await module.call({
 
 Before calling another module, the requester must obtain a `SignedGrant` from Huglo. When you configure a `GrantStore` and/or `onGrantCallback`, the SDK registers `GET /grant/callback` at `callbackPath` (default `/grant/callback`). That path is also what `getCallbackUrl()` returns (`endpoint` + `callbackPath`).
 
-**Default behavior** (only `grantStore`, no hooks): the SDK exchanges the code, saves grants via your store, and returns a page that closes the tab.
+When `grantStore` is set, the SDK also registers **`GET /grant/init`** (or `grantInitPath(callbackPath)` when `callbackPath` ends with `/callback`, e.g. `/oauth/grant/init`).
+
+### Browser popup flow (`/grant/init`)
+
+A host app (e.g. flow builder) opens a popup:
+
+```
+GET {endpoint}/grant/init?subject=huglo:user:…&holder=…&scope=…
+```
+
+- **`requester`** is always this module’s id (from `Module` config), not a query param.
+- If `grantStore.find({ subject, holder, scope, requester })` returns a grant → HTML notifies `window.opener` and closes.
+- If not → `createInvite` + **302** to Huglo `inviteUrl` (requires `endpoint` to be configured).
+- After approval, Huglo redirects to `/grant/callback?code=…` → exchange, save, same **`postMessage`** to opener.
+
+**Opener message** (init shortcut and callback success):
+
+```typescript
+{ type: "huglo:grant:authorized", subject: string, holder: string, scope: string }
+```
+
+Use a specific `targetOrigin` in the host listener (the SDK sends `"*"` from the module page).
+
+**Default behavior** (only `grantStore`, no hooks): callback exchanges the code, saves grants, and returns HTML that `postMessage`s `huglo:grant:authorized` to `window.opener` then closes the popup.
 
 ```typescript
 import { Module, InMemoryGrantStore } from "@huglo/module-sdk";
@@ -357,14 +382,15 @@ const module = new Module({
     // Product-specific side effects after exchange + save
     await markInstallActive(code, grants);
 
-    // Popup page that notifies the opener (e.g. SPA opened invite in a window)
-    return `<!DOCTYPE html>
-<html><body><script>
-  if (window.opener) {
-    window.opener.postMessage({ type: "huglo:grant", ok: true }, "https://app.example.com");
-    window.close();
-  }
-</script><p>Authorization complete.</p></body></html>`;
+    // Custom popup page (default grantStore path already posts huglo:grant:authorized)
+    return grantAuthorizedNotifyHtml(
+      {
+        subject: grants[0]!.grant.subject,
+        holder: grants[0]!.grant.holder,
+        scope: grants[0]!.grant.scope,
+      },
+      "Authorization complete.",
+    );
   },
   onGrantCallbackError: ({ stage, error, c }) => {
     if (stage === "missing_code") {
@@ -391,6 +417,103 @@ interface GrantStore {
 The SDK calls `save` from the callback route when `grantStore` is configured. `find` / `list` / `delete` are for your application logic. `InMemoryGrantStore` is exported for dev and tests.
 
 The invite payload is signed with this module's Ed25519 private key (`JCS(payload)`). Huglo verifies the signature before issuing the `inviteUrl`.
+
+## File storage
+
+Modules can create short-lived files and serve them at public URLs until `expires_at`. After expiry, `GET /file/:token` returns 404 and the file is removed from the store.
+
+Requires `MODULE_ENDPOINT` or `config.endpoint` (same as grant callbacks). Uses `InMemoryFileStore` by default; pass `fileStore` in `ModuleConfig` to override.
+
+### Create a file
+
+```typescript
+import { Module, FileSchema } from "@huglo/module-sdk";
+
+const file = await module.createFile({
+  data: Buffer.from("Hello"),
+  content_type: "text/plain",
+  filename: "hello.txt",
+  expires_at: new Date(Date.now() + 3600_000),
+});
+// file.url → https://your-module.example.com/file/<token>
+
+// Or fetch from a URL (default max 10 MiB; override with maxBytes)
+const fromUrl = await module.createFile({
+  url: "https://example.com/report.pdf",
+  expires_at: new Date(Date.now() + 86_400_000),
+});
+```
+
+Returned shape (`FileSchema`):
+
+```typescript
+{
+  url: string;           // {endpoint}/file/{token}
+  content_type: string;
+  filename: string;
+  size: number;
+  expires_at: string;    // ISO 8601 datetime
+}
+```
+
+Downloads are **unauthenticated** — anyone with the URL can fetch until expiry. Use short TTLs for sensitive content.
+
+### FileStore (developer implements)
+
+```typescript
+interface FileStore {
+  put(file: StoredFile): Promise<void>;
+  get(token: string): Promise<StoredFile | null>;
+  delete(token: string): Promise<void>;
+}
+
+interface StoredFile {
+  token: string;
+  body: Uint8Array;
+  content_type: string;
+  filename: string;
+  size: number;
+  expires_at: string;
+}
+```
+
+`InMemoryFileStore` is exported for dev and tests. Example filesystem store (not shipped):
+
+```typescript
+import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
+import path from "node:path";
+import type { FileStore, StoredFile } from "@huglo/module-sdk";
+
+class FilesystemFileStore implements FileStore {
+  constructor(private readonly dir: string) {}
+
+  async put(file: StoredFile): Promise<void> {
+    await mkdir(this.dir, { recursive: true });
+    await writeFile(path.join(this.dir, file.token), JSON.stringify(file));
+  }
+
+  async get(token: string): Promise<StoredFile | null> {
+    try {
+      const raw = await readFile(path.join(this.dir, token), "utf8");
+      const file = JSON.parse(raw) as StoredFile;
+      file.body = new Uint8Array(Buffer.from(file.body as unknown as Buffer));
+      if (Date.now() > Date.parse(file.expires_at)) {
+        await this.delete(token);
+        return null;
+      }
+      return file;
+    } catch {
+      return null;
+    }
+  }
+
+  async delete(token: string): Promise<void> {
+    await unlink(path.join(this.dir, token)).catch(() => {});
+  }
+}
+```
+
+Example S3 store (not shipped): implement `put`/`get`/`delete` with object keys `files/{token}` and metadata headers for `content_type`, `filename`, and `expires_at`; delete on expired `get`.
 
 ## Handler context
 

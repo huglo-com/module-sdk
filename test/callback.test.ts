@@ -4,7 +4,11 @@ import { signObject } from "../src/signing.js";
 import { InMemoryDirectoryClient } from "../src/directory.js";
 import { InMemoryGrantStore } from "../src/store.js";
 import { Module, exchangeAndSaveGrants } from "../src/module.js";
-import { DEFAULT_CALLBACK_PATH } from "../src/server.js";
+import {
+  DEFAULT_CALLBACK_PATH,
+  DEFAULT_GRANT_INIT_PATH,
+  grantInitPath,
+} from "../src/server.js";
 import type { SignedGrant } from "../src/envelope.js";
 import type { GrantCallbackErrorContext } from "../src/grant-callback.js";
 
@@ -63,7 +67,8 @@ describe("grant callback route", () => {
 
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain("window.close");
+    expect(html).toContain("huglo:grant:authorized");
+    expect(html).toContain("window.opener");
     expect(html).toContain("Authorization complete");
 
     const stored = await grantStore.find({
@@ -141,8 +146,8 @@ describe("grant callback route", () => {
 
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain("window.close");
-    expect(html).toContain("Authorization complete");
+    expect(html).toContain("huglo:grant:authorized");
+    expect(html).toContain("window.opener");
   });
 
   it("onGrantCallback receives exchanged grants and code", async () => {
@@ -242,6 +247,152 @@ describe("grant callback route", () => {
   it("getCallbackUrl returns endpoint plus callback path", () => {
     const module = createModule();
     expect(module.getCallbackUrl()).toBe("https://trovi.example/grant/callback");
+  });
+});
+
+describe("grant init route", () => {
+  const keys = generateKeyPair();
+  const authorKeys = generateKeyPair();
+  let directory: InMemoryDirectoryClient;
+  let grantStore: InMemoryGrantStore;
+
+  const sampleInviteResponse = {
+    invite: {
+      id: "inv-init-1",
+      requesterModuleId: "trovi-test",
+      callbackUrl: "https://trovi.example/grant/callback",
+      constraints: {},
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      createdByUserId: "user-1",
+      active: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      scopes: [
+        {
+          id: "scope-1",
+          inviteId: "inv-init-1",
+          holder: "da",
+          scope: "invoice:write",
+        },
+      ],
+    },
+    inviteUrl: "https://account.huglo.test/invite/init-test",
+  };
+
+  function buildGrant(overrides: Partial<{ grant_id: string }> = {}) {
+    const grant = {
+      grant_id: overrides.grant_id ?? "g-init-001",
+      holder: "da",
+      scope: "invoice:write",
+      subject: "huglo:user:user-1",
+      requester: "trovi-test",
+      author: "huglo:user:user-1",
+      constraints: {},
+      issued_at: new Date(Date.now() - 60_000).toISOString(),
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    };
+    return { grant, signature: signObject(grant, authorKeys.privateKey) };
+  }
+
+  function createModule(
+    withStore = true,
+    overrides: Partial<ConstructorParameters<typeof Module>[0]> = {},
+  ): Module {
+    return new Module({
+      id: "trovi-test",
+      name: "Trovi",
+      description: "Test",
+      version: "1.0.0",
+      keyPair: keys,
+      huglo: { directoryUrl: "http://unused" },
+      directory,
+      endpoint: "https://trovi.example",
+      ...(withStore ? { grantStore } : {}),
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    directory = new InMemoryDirectoryClient();
+    grantStore = new InMemoryGrantStore();
+    directory.setInviteResponse("trovi-test", sampleInviteResponse);
+  });
+
+  it("grantInitPath maps callback path to init path", () => {
+    expect(grantInitPath("/grant/callback")).toBe("/grant/init");
+    expect(grantInitPath("/oauth/grant/callback")).toBe("/oauth/grant/init");
+    expect(grantInitPath("/custom")).toBe(DEFAULT_GRANT_INIT_PATH);
+  });
+
+  it("does not register init without grantStore", async () => {
+    const module = createModule(false);
+    const res = await module.getApp().request(DEFAULT_GRANT_INIT_PATH);
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 400 when query params are missing", async () => {
+    const module = createModule();
+    const res = await module.getApp().request(DEFAULT_GRANT_INIT_PATH);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("Missing subject");
+  });
+
+  it("returns notify HTML when grant already exists", async () => {
+    await grantStore.save(buildGrant());
+    const module = createModule();
+    const res = await module.getApp().request(
+      `${DEFAULT_GRANT_INIT_PATH}?subject=huglo:user:user-1&holder=da&scope=invoice:write`,
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("huglo:grant:authorized");
+    expect(html).toContain("huglo:user:user-1");
+    expect(html).toContain("window.opener");
+  });
+
+  it("redirects to inviteUrl when grant is missing", async () => {
+    let capturedModuleId: string | undefined;
+    const originalCreateInvite = directory.createInvite.bind(directory);
+    directory.createInvite = async (moduleId, signed) => {
+      capturedModuleId = moduleId;
+      expect(signed.payload).toMatchObject({
+        moduleId: "trovi-test",
+        callbackUrl: "https://trovi.example/grant/callback",
+        scopes: [{ holder: "da", scope: "invoice:write" }],
+      });
+      return originalCreateInvite(moduleId, signed);
+    };
+
+    const module = createModule();
+    const res = await module.getApp().request(
+      `${DEFAULT_GRANT_INIT_PATH}?subject=huglo:user:user-1&holder=da&scope=invoice:write`,
+      { redirect: "manual" },
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("Location")).toBe(sampleInviteResponse.inviteUrl);
+    expect(capturedModuleId).toBe("trovi-test");
+  });
+
+  it("returns 503 when endpoint is missing and grant is missing", async () => {
+    const module = createModule(true, { endpoint: undefined });
+    const res = await module.getApp().request(
+      `${DEFAULT_GRANT_INIT_PATH}?subject=huglo:user:user-1&holder=da&scope=invoice:write`,
+    );
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain("endpoint not configured");
+  });
+
+  it("registers init under custom callback path prefix", async () => {
+    const module = createModule(true, {
+      callbackPath: "/oauth/grant/callback",
+    });
+    const initPath = grantInitPath("/oauth/grant/callback");
+    const res = await module.getApp().request(
+      `${initPath}?subject=huglo:user:user-1&holder=da&scope=invoice:write`,
+      { redirect: "manual" },
+    );
+    expect(res.status).toBe(302);
+    expect(initPath).toBe("/oauth/grant/init");
   });
 });
 

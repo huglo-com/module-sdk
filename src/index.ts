@@ -63,7 +63,22 @@ export type { DirectoryClient } from "./directory.js";
 export { HttpDirectoryClient, InMemoryDirectoryClient } from "./directory.js";
 export type { GrantStore } from "./store.js";
 export { InMemoryGrantStore } from "./store.js";
-export { DEFAULT_CALLBACK_PATH } from "./server.js";
+export type { FileStore, StoredFile } from "./file-store.js";
+export { InMemoryFileStore } from "./file-store.js";
+export {
+  FileSchema,
+  type File,
+  type CreateFileOptions,
+  type CreateFileDataOptions,
+  type CreateFileUrlOptions,
+  DEFAULT_MAX_FILE_BYTES,
+} from "./file.js";
+export {
+  DEFAULT_CALLBACK_PATH,
+  DEFAULT_GRANT_INIT_PATH,
+  grantInitPath,
+  grantAuthorizedNotifyHtml,
+} from "./module.js";
 export { loadKeyPair, generateKeyPair } from "./keys.js";
 export type { ModuleKeyPair } from "./keys.js";
 
