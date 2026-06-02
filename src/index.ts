@@ -13,8 +13,32 @@ export type {
   GrantCallbackStage,
   OnGrantCallback,
   OnGrantCallbackError,
+  ConfigDefinition,
+  ConfigOptions,
+  FieldSource,
+  ConfigStore,
+  InstanceConfig,
+  HugloOAuthClient,
+  OAuthClientOptions,
+  OnConfigSaved,
+  OnConfigSavedContext,
+  ConfigPageTheme,
 } from "./module.js";
-export type { EmitterManifestEntry, EmitterDefinition } from "./manifest.js";
+export {
+  InMemoryConfigStore,
+  assembleConfigValues,
+  ConfigAssemblyError,
+  HttpHugloOAuthClient,
+  InMemoryHugloOAuthClient,
+  resolveOAuthOptions,
+  DEFAULT_CONFIG_PATH,
+} from "./module.js";
+export type {
+  EmitterManifestEntry,
+  EmitterDefinition,
+  ConfigManifestEntry,
+  ConfigManifestFieldEntry,
+} from "./manifest.js";
 export type { Ctx, ProtectedCtx, OpenCtx } from "./context.js";
 export type {
   SignedGrant,

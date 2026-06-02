@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { ConfigDefinition } from "./config.js";
+import type { FieldSource } from "./config.js";
 
 export interface ScopeManifestEntry {
   name: string;
@@ -15,6 +17,16 @@ export interface EmitterManifestEntry {
   output: Record<string, unknown>;
 }
 
+export interface ConfigManifestFieldEntry {
+  name: string;
+  type: Record<string, unknown>;
+  source: FieldSource;
+}
+
+export interface ConfigManifestEntry {
+  fields: ConfigManifestFieldEntry[];
+}
+
 export interface ModuleManifest {
   id: string;
   name: string;
@@ -23,6 +35,9 @@ export interface ModuleManifest {
   publicKey: string;
   scopes: ScopeManifestEntry[];
   emitters: EmitterManifestEntry[];
+  config?: ConfigManifestEntry;
+  /** Present when the module overrides the default SDK config page. */
+  configPageUrl?: string;
 }
 
 export interface ScopeDefinition {
@@ -38,6 +53,19 @@ export interface EmitterDefinition {
   output: z.ZodType;
 }
 
+export function buildConfigManifest(definition: ConfigDefinition): ConfigManifestEntry {
+  const shape = definition.schema.shape;
+  const fields: ConfigManifestFieldEntry[] = [];
+  for (const [name, fieldSchema] of Object.entries(shape)) {
+    fields.push({
+      name,
+      type: z.toJSONSchema(fieldSchema, { io: "input" }) as Record<string, unknown>,
+      source: definition.fields[name] ?? "userEntered",
+    });
+  }
+  return { fields };
+}
+
 export function buildManifest(
   config: {
     id: string;
@@ -45,6 +73,8 @@ export function buildManifest(
     description: string;
     version: string;
     publicKey: string;
+    configDefinition?: ConfigDefinition;
+    configPageUrl?: string;
   },
   scopes: Map<string, ScopeDefinition>,
   emitters: Map<string, EmitterDefinition> = new Map(),
@@ -70,7 +100,7 @@ export function buildManifest(
       output: z.toJSONSchema(def.output, { io: "output" }) as Record<string, unknown>,
     });
   }
-  return {
+  const manifest: ModuleManifest = {
     id: config.id,
     name: config.name,
     description: config.description,
@@ -79,4 +109,13 @@ export function buildManifest(
     scopes: scopeEntries,
     emitters: emitterEntries,
   };
+
+  if (config.configDefinition) {
+    manifest.config = buildConfigManifest(config.configDefinition);
+  }
+  if (config.configPageUrl) {
+    manifest.configPageUrl = config.configPageUrl;
+  }
+
+  return manifest;
 }

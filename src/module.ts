@@ -10,7 +10,19 @@ import { createModuleServer, DEFAULT_CALLBACK_PATH, type ScopeHandler } from "./
 import { callScope, type CallOptions } from "./client.js";
 import { signObject } from "./signing.js";
 import type { GrantStore } from "./store.js";
+import type { ConfigStore } from "./config-store.js";
+import { InMemoryConfigStore } from "./config-store.js";
+import type { ConfigDefinition } from "./config.js";
 import type { ProtectedCtx, OpenCtx } from "./context.js";
+import {
+  HttpHugloOAuthClient,
+  resolveOAuthOptions,
+  type HugloOAuthClient,
+  type OAuthClientOptions,
+} from "./oauth.js";
+import type { OnConfigSaved } from "./config-routes.js";
+import { DEFAULT_CONFIG_PATH } from "./config-routes.js";
+import type { ConfigPageTheme } from "./config-page.js";
 import type {
   CreateInviteResponse,
   InviteScopeRequest,
@@ -28,6 +40,22 @@ export type {
 } from "./envelope.js";
 export type { DirectoryClient } from "./directory.js";
 export type { GrantStore } from "./store.js";
+export type { ConfigStore, InstanceConfig } from "./config-store.js";
+export { InMemoryConfigStore } from "./config-store.js";
+export type { ConfigDefinition, ConfigOptions, FieldSource } from "./config.js";
+export { assembleConfigValues, ConfigAssemblyError } from "./config.js";
+export type {
+  HugloOAuthClient,
+  OAuthClientOptions,
+} from "./oauth.js";
+export {
+  HttpHugloOAuthClient,
+  InMemoryHugloOAuthClient,
+  resolveOAuthOptions,
+} from "./oauth.js";
+export type { OnConfigSaved, OnConfigSavedContext } from "./config-routes.js";
+export { DEFAULT_CONFIG_PATH } from "./config-routes.js";
+export type { ConfigPageTheme } from "./config-page.js";
 export { loadKeyPair, generateKeyPair } from "./keys.js";
 
 /** Production Huglo directory URL used when none is configured. */
@@ -66,6 +94,20 @@ export interface ModuleConfig extends GrantCallbackOptions {
    * and `getCallbackUrl()`.
    */
   callbackPath?: string;
+  /** OAuth client for config login (separate from federation keypair). */
+  oauth?: Partial<OAuthClientOptions>;
+  /** Override OAuth client (e.g. in-memory for tests). */
+  oauthClient?: HugloOAuthClient;
+  /** Per-instance config persistence (required when using config()). */
+  configStore?: ConfigStore;
+  /** Config UI path (default: /config). */
+  configPath?: string;
+  /** Override default SDK config page URL (published in manifest). */
+  configPageUrl?: string;
+  /** Light theming for the default config page. */
+  theme?: ConfigPageTheme;
+  /** Hook after config intake saves an instance (provisioning, grant invites, etc.). */
+  onConfigSaved?: OnConfigSaved;
 }
 
 export type {
@@ -118,17 +160,19 @@ interface RegisteredScope<I extends z.ZodType, O extends z.ZodType>
 
 export class Module {
   readonly id: string;
-  private readonly config: ModuleConfig;
+  private readonly init: ModuleConfig;
   private readonly directory: DirectoryClient;
   private readonly scopes = new Map<string, RegisteredScope<z.ZodType, z.ZodType>>();
   private readonly emitters = new Map<string, EmitterDefinition>();
+  private configDefinition: ConfigDefinition | undefined;
+  private defaultConfigStore: ConfigStore | undefined;
   private app: Hono | null = null;
   private server: ReturnType<typeof serve> | null = null;
   customRoutes: Hono | undefined;
 
   constructor(config: ModuleConfig) {
     this.id = config.id;
-    this.config = {
+    this.init = {
       ...config,
       challenge: config.challenge ?? process.env["MODULE_CHALLENGE"],
       endpoint: config.endpoint ?? process.env["MODULE_ENDPOINT"],
@@ -180,6 +224,21 @@ export class Module {
   }
 
   /**
+   * Declare per-instance configuration schema and field sources.
+   * Enables config routes, Huglo OAuth login, and /manifest config output.
+   */
+  config(options: ConfigDefinition): this {
+    this.configDefinition = options;
+    this.app = null;
+    return this;
+  }
+
+  /** Expose the config store (for module logic that reads stored instances). */
+  getConfigStore(): ConfigStore | undefined {
+    return this.init.configStore ?? (this.configDefinition ? this.resolveConfigStore() : undefined);
+  }
+
+  /**
    * Validate data against an emitter's output schema and call the grant's holder scope.
    */
   async emit(name: string, data: unknown, grant: SignedGrant): Promise<unknown> {
@@ -207,7 +266,7 @@ export class Module {
     return callScope(
       {
         moduleId: this.id,
-        privateKey: this.config.keyPair.privateKey,
+        privateKey: this.init.keyPair.privateKey,
         directory: this.directory,
       },
       options,
@@ -226,7 +285,7 @@ export class Module {
       constraints: options.constraints ?? {},
       iat: new Date().toISOString(),
     };
-    const signature = signObject(payload, this.config.keyPair.privateKey);
+    const signature = signObject(payload, this.init.keyPair.privateKey);
     return this.directory.createInvite(this.id, { payload, signature });
   }
 
@@ -237,27 +296,72 @@ export class Module {
 
   /** Get the underlying Hono app (useful for testing). */
   getApp(): Hono {
+    const configRuntime = this.resolveConfigRuntime();
     this.app ??= createModuleServer({
       moduleId: this.id,
-      name: this.config.name,
-      description: this.config.description,
-      version: this.config.version,
-      publicKeyBase64: this.config.keyPair.publicKeyBase64,
-      privateKey: this.config.keyPair.privateKey,
+      name: this.init.name,
+      description: this.init.description,
+      version: this.init.version,
+      publicKeyBase64: this.init.keyPair.publicKeyBase64,
+      privateKey: this.init.keyPair.privateKey,
       directory: this.directory,
       scopes: this.scopes,
       emitters: this.emitters,
-      challenge: this.config.challenge,
-      endpoint: this.config.endpoint,
-      assetsDir: this.config.assetsDir,
+      challenge: this.init.challenge,
+      endpoint: this.init.endpoint,
+      assetsDir: this.init.assetsDir,
       customRoutes: this.customRoutes,
-      grantStore: this.config.grantStore,
-      callbackPath: this.config.callbackPath,
-      onGrantCallback: this.config.onGrantCallback,
-      onGrantCallbackError: this.config.onGrantCallbackError,
-      callbackMiddleware: this.config.callbackMiddleware,
+      grantStore: this.init.grantStore,
+      callbackPath: this.init.callbackPath,
+      onGrantCallback: this.init.onGrantCallback,
+      onGrantCallbackError: this.init.onGrantCallbackError,
+      callbackMiddleware: this.init.callbackMiddleware,
+      configDefinition: this.configDefinition,
+      configStore: configRuntime?.configStore,
+      oauth: configRuntime?.oauth,
+      oauthOptions: configRuntime?.oauthOptions,
+      configPath: this.init.configPath ?? DEFAULT_CONFIG_PATH,
+      configPageUrl: this.init.configPageUrl,
+      configTheme: this.init.theme,
+      onConfigSaved: this.init.onConfigSaved,
     });
     return this.app;
+  }
+
+  private resolveConfigStore(): ConfigStore {
+    if (this.init.configStore) {
+      return this.init.configStore;
+    }
+    this.defaultConfigStore ??= new InMemoryConfigStore();
+    return this.defaultConfigStore;
+  }
+
+  private resolveConfigRuntime():
+    | {
+        configStore: ConfigStore;
+        oauth: HugloOAuthClient;
+        oauthOptions: OAuthClientOptions;
+      }
+    | undefined {
+    if (!this.configDefinition) {
+      return undefined;
+    }
+
+    const oauthOptions = resolveOAuthOptions(this.init.oauth);
+    if (!oauthOptions) {
+      throw new Error(
+        "Config requires OAuth. Set oauth in ModuleConfig or HUGLO_OAUTH_CLIENT_ID, HUGLO_OAUTH_CLIENT_SECRET, HUGLO_OAUTH_REDIRECT_URI.",
+      );
+    }
+
+    const oauth =
+      this.init.oauthClient ?? new HttpHugloOAuthClient(oauthOptions);
+
+    return {
+      configStore: this.resolveConfigStore(),
+      oauth,
+      oauthOptions,
+    };
   }
 
   /** Expose directory client (for testing harness). */
@@ -267,16 +371,16 @@ export class Module {
 
   /** Expose keypair (for testing harness). */
   getKeyPair(): ModuleKeyPair {
-    return this.config.keyPair;
+    return this.init.keyPair;
   }
 
   /** Full callback URL for createInvite (endpoint + callbackPath). */
   getCallbackUrl(): string {
-    const endpoint = this.config.endpoint?.replace(/\/$/, "");
+    const endpoint = this.init.endpoint?.replace(/\/$/, "");
     if (!endpoint) {
       throw new Error("MODULE_ENDPOINT or config.endpoint is required for getCallbackUrl()");
     }
-    const path = this.config.callbackPath ?? DEFAULT_CALLBACK_PATH;
+    const path = this.init.callbackPath ?? DEFAULT_CALLBACK_PATH;
     const normalizedPath = path.startsWith("/") ? path : `/${path}`;
     return `${endpoint}${normalizedPath}`;
   }
@@ -301,8 +405,8 @@ export class Module {
 
   /** Update registration challenge config at runtime. */
   setChallenge(challenge: string, endpoint: string): void {
-    this.config.challenge = challenge;
-    this.config.endpoint = endpoint;
+    this.init.challenge = challenge;
+    this.init.endpoint = endpoint;
     this.app = null;
   }
 }

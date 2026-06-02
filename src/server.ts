@@ -25,6 +25,11 @@ import type {
   OnGrantCallback,
   OnGrantCallbackError,
 } from "./grant-callback.js";
+import type { ConfigDefinition } from "./config.js";
+import type { ConfigStore } from "./config-store.js";
+import { mountConfigRoutes, type OnConfigSaved } from "./config-routes.js";
+import type { ConfigPageTheme } from "./config-page.js";
+import type { HugloOAuthClient, OAuthClientOptions } from "./oauth.js";
 
 export const DEFAULT_CALLBACK_PATH = "/grant/callback";
 
@@ -47,6 +52,14 @@ export interface ServerConfig {
   onGrantCallback?: OnGrantCallback;
   onGrantCallbackError?: OnGrantCallbackError;
   callbackMiddleware?: MiddlewareHandler | MiddlewareHandler[];
+  configDefinition?: ConfigDefinition;
+  configStore?: ConfigStore;
+  oauth?: HugloOAuthClient;
+  oauthOptions?: OAuthClientOptions;
+  configPath?: string;
+  configPageUrl?: string;
+  configTheme?: ConfigPageTheme;
+  onConfigSaved?: OnConfigSaved;
 }
 
 export type ProtectedScopeHandler<I, O> = (ctx: ProtectedCtx<I>) => Promise<O>;
@@ -72,6 +85,8 @@ export function createModuleServer(options: CreateServerOptions): Hono {
         description: options.description,
         version: options.version,
         publicKey: options.publicKeyBase64,
+        configDefinition: options.configDefinition,
+        configPageUrl: options.configPageUrl,
       },
       options.scopes,
       options.emitters ?? new Map(),
@@ -114,6 +129,24 @@ export function createModuleServer(options: CreateServerOptions): Hono {
 
   if (options.customRoutes) {
     app.route("/api", options.customRoutes);
+  }
+
+  if (
+    options.configDefinition &&
+    options.configStore &&
+    options.oauth &&
+    options.oauthOptions
+  ) {
+    mountConfigRoutes(app, {
+      configDefinition: options.configDefinition,
+      configStore: options.configStore,
+      oauth: options.oauth,
+      oauthOptions: options.oauthOptions,
+      configPath: options.configPath,
+      configPageUrl: options.configPageUrl,
+      theme: options.configTheme,
+      onConfigSaved: options.onConfigSaved,
+    });
   }
 
   app.post("/invoke/:scope", async (c) => {
