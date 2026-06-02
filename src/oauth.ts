@@ -143,8 +143,12 @@ export class InMemoryHugloOAuthClient implements HugloOAuthClient {
     this.subjectsByCode.set(code, subject);
   }
 
-  buildAuthorizeUrl(state: string, _pkce: OAuthPkceParams): string {
-    return `https://oauth.test/authorize?state=${encodeURIComponent(state)}`;
+  buildAuthorizeUrl(state: string, pkce: OAuthPkceParams): string {
+    const url = new URL("https://oauth.test/authorize");
+    url.searchParams.set("state", state);
+    url.searchParams.set("code_challenge", pkce.codeChallenge);
+    url.searchParams.set("code_challenge_method", "S256");
+    return url.toString();
   }
 
   async exchangeCode(code: string, _codeVerifier: string): Promise<OAuthExchangeResult> {

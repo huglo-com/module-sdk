@@ -295,6 +295,15 @@ describe("config", () => {
       );
     });
 
+    it("config page notifies opener on save", async () => {
+      const res = await mod.getApp().request("/config");
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("window.opener");
+      expect(html).toContain("huglo:config:saved");
+      expect(html).toContain("window.close");
+    });
+
     it("login redirect includes code_challenge", async () => {
       const res = await mod.getApp().request("/config/login", {
         redirect: "manual",

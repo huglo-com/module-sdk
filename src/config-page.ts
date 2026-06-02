@@ -205,7 +205,13 @@ export function configPageHtml(options: ConfigPageOptions): string {
           return;
         }
         showMessage("Saved. Instance: " + json.instanceId, "success");
-        if (window.parent !== window) {
+        if (window.opener) {
+          window.opener.postMessage(
+            { type: "huglo:config:saved", instanceId: json.instanceId },
+            "*",
+          );
+          window.close();
+        } else if (window.parent !== window) {
           window.parent.postMessage({ type: "huglo:config:saved", instanceId: json.instanceId }, "*");
         }
       } catch (err) {
