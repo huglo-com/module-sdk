@@ -33,6 +33,13 @@ export {
   resolveOAuthOptions,
   DEFAULT_CONFIG_PATH,
 } from "./module.js";
+// createConfigSession, readConfigSession, CONFIG_SESSION_COOKIE, OAUTH_STATE_COOKIE are exported only for testing purposes, they should not be used in the production code
+export {
+  createConfigSession,
+  readConfigSession,
+  CONFIG_SESSION_COOKIE,
+  OAUTH_STATE_COOKIE,
+} from "./oauth.js";
 export type {
   EmitterManifestEntry,
   EmitterDefinition,
