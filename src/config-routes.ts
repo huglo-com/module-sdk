@@ -12,9 +12,14 @@ import type { ConfigPageTheme } from "./config-page.js";
 import {
   CONFIG_SESSION_COOKIE,
   OAUTH_STATE_COOKIE,
+  OAUTH_PKCE_COOKIE,
   createConfigSession,
   readConfigSession,
+  createPkceCookie,
+  readPkceCookie,
   createOAuthState,
+  generateCodeVerifier,
+  generateCodeChallenge,
   type HugloOAuthClient,
   type OAuthClientOptions,
 } from "./oauth.js";
@@ -63,30 +68,57 @@ export function mountConfigRoutes(app: Hono, options: ConfigRoutesOptions): void
     }
 
     const state = createOAuthState();
-    setCookie(c, OAUTH_STATE_COOKIE, state, {
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = generateCodeChallenge(codeVerifier);
+    const cookieOpts = {
       httpOnly: true,
       secure: true,
-      sameSite: "Lax",
+      sameSite: "Lax" as const,
       path: "/",
       maxAge: 600,
-    });
-    return c.redirect(options.oauth.buildAuthorizeUrl(state));
+    };
+    setCookie(c, OAUTH_STATE_COOKIE, state, cookieOpts);
+    setCookie(
+      c,
+      OAUTH_PKCE_COOKIE,
+      createPkceCookie(codeVerifier, state, options.oauthOptions.clientSecret),
+      cookieOpts,
+    );
+    return c.redirect(
+      options.oauth.buildAuthorizeUrl(state, { codeChallenge }),
+    );
   });
 
   app.get(`${configPath}/callback`, async (c) => {
+    const oauthError = c.req.query("error");
+    if (oauthError) {
+      const description =
+        c.req.query("error_description") ?? oauthError;
+      clearOAuthCookies(c);
+      return c.html(oauthCallbackErrorHtml(description), 400);
+    }
+
     const code = c.req.query("code");
     const state = c.req.query("state");
     const savedState = getCookie(c, OAUTH_STATE_COOKIE);
+    const codeVerifier =
+      state && savedState && state === savedState
+        ? readPkceCookie(
+            getCookie(c, OAUTH_PKCE_COOKIE),
+            state,
+            options.oauthOptions.clientSecret,
+          )
+        : null;
 
-    deleteCookie(c, OAUTH_STATE_COOKIE, { path: "/" });
+    clearOAuthCookies(c);
 
-    if (!code || !state || !savedState || state !== savedState) {
+    if (!code || !state || !savedState || state !== savedState || !codeVerifier) {
       return c.text("Invalid OAuth callback", 400);
     }
 
     let subject: string;
     try {
-      const result = await options.oauth.exchangeCode(code);
+      const result = await options.oauth.exchangeCode(code, codeVerifier);
       subject = result.subject;
     } catch {
       return c.text("OAuth exchange failed", 502);
@@ -209,4 +241,27 @@ async function handleIntake(
 
 function normalizePath(path: string): string {
   return path.startsWith("/") ? path : `/${path}`;
+}
+
+function clearOAuthCookies(c: Context): void {
+  deleteCookie(c, OAUTH_STATE_COOKIE, { path: "/" });
+  deleteCookie(c, OAUTH_PKCE_COOKIE, { path: "/" });
+}
+
+function oauthCallbackErrorHtml(message: string): string {
+  const escaped = message
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Login failed</title>
+</head>
+<body>
+  <p>Could not sign in with Huglo: ${escaped}</p>
+</body>
+</html>`;
 }

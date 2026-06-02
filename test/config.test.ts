@@ -8,11 +8,18 @@ import {
   ConfigAssemblyError,
 } from "../src/config.js";
 import { InMemoryConfigStore } from "../src/config-store.js";
-import { InMemoryHugloOAuthClient } from "../src/oauth.js";
 import {
+  InMemoryHugloOAuthClient,
+  HttpHugloOAuthClient,
   createConfigSession,
   readConfigSession,
+  createPkceCookie,
+  readPkceCookie,
+  generateCodeVerifier,
+  generateCodeChallenge,
   CONFIG_SESSION_COOKIE,
+  OAUTH_PKCE_COOKIE,
+  OAUTH_STATE_COOKIE,
 } from "../src/oauth.js";
 import type { ModuleManifest } from "../src/manifest.js";
 
@@ -144,6 +151,84 @@ describe("config", () => {
     });
   });
 
+  describe("PKCE", () => {
+    const secret = "test-secret";
+
+    it("generateCodeChallenge is S256 base64url of verifier", () => {
+      const verifier = "test-verifier-value";
+      const challenge = generateCodeChallenge(verifier);
+      const expected = generateCodeChallenge(verifier);
+      expect(challenge).toBe(expected);
+      expect(challenge).not.toBe(verifier);
+    });
+
+    it("signed PKCE cookie round-trips verifier for matching state", () => {
+      const verifier = generateCodeVerifier();
+      const state = "state-abc";
+      const cookie = createPkceCookie(verifier, state, secret);
+      expect(readPkceCookie(cookie, state, secret)).toBe(verifier);
+    });
+
+    it("rejects PKCE cookie when state does not match", () => {
+      const cookie = createPkceCookie("verifier", "state-a", secret);
+      expect(readPkceCookie(cookie, "state-b", secret)).toBeNull();
+    });
+
+    it("rejects PKCE cookie with wrong secret", () => {
+      const cookie = createPkceCookie("verifier", "state-a", secret);
+      expect(readPkceCookie(cookie, "state-a", "wrong")).toBeNull();
+    });
+  });
+
+  describe("HttpHugloOAuthClient PKCE", () => {
+    const oauthOptions = {
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      redirectUri: "https://module.example/config/callback",
+      authorizeUrl: "https://auth.example/oauth2/authorize",
+      tokenUrl: "https://auth.example/oauth2/token",
+      userInfoUrl: "https://auth.example/oauth2/userinfo",
+    };
+
+    it("buildAuthorizeUrl includes code_challenge and S256 method", () => {
+      const client = new HttpHugloOAuthClient(oauthOptions);
+      const url = new URL(
+        client.buildAuthorizeUrl("state-1", { codeChallenge: "challenge-xyz" }),
+      );
+      expect(url.searchParams.get("code_challenge")).toBe("challenge-xyz");
+      expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+      expect(url.searchParams.get("state")).toBe("state-1");
+    });
+
+    it("exchangeCode sends code_verifier in token request", async () => {
+      let tokenBody = "";
+      const fetchFn = async (input: string | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/token")) {
+          tokenBody = String(init?.body ?? "");
+          return new Response(
+            JSON.stringify({ access_token: "access-token" }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url.includes("/userinfo")) {
+          return new Response(JSON.stringify({ sub: "user-123" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      };
+
+      const client = new HttpHugloOAuthClient({ ...oauthOptions, fetch: fetchFn });
+      const result = await client.exchangeCode("auth-code", "verifier-secret");
+      expect(result.subject).toBe("huglo:user:user-123");
+      const params = new URLSearchParams(tokenBody);
+      expect(params.get("code_verifier")).toBe("verifier-secret");
+      expect(params.get("code")).toBe("auth-code");
+    });
+  });
+
   describe("config routes", () => {
     const keys = generateKeyPair();
     const directory = new InMemoryDirectoryClient();
@@ -208,6 +293,30 @@ describe("config", () => {
           expect.objectContaining({ name: "hostRef", source: "hostProvided" }),
         ]),
       );
+    });
+
+    it("login redirect includes code_challenge", async () => {
+      const res = await mod.getApp().request("/config/login", {
+        redirect: "manual",
+      });
+      expect(res.status).toBe(302);
+      const location = res.headers.get("Location");
+      expect(location).toBeTruthy();
+      const url = new URL(location!);
+      expect(url.searchParams.get("code_challenge")).toBeTruthy();
+      expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+      const setCookie = res.headers.get("Set-Cookie") ?? "";
+      expect(setCookie).toContain(OAUTH_STATE_COOKIE);
+      expect(setCookie).toContain(OAUTH_PKCE_COOKIE);
+    });
+
+    it("callback returns error when OAuth redirects with error", async () => {
+      const res = await mod.getApp().request(
+        "/config/callback?error=invalid_request&error_description=pkce+is+required&state=x",
+      );
+      expect(res.status).toBe(400);
+      const text = await res.text();
+      expect(text).toContain("pkce is required");
     });
 
     it("intake rejects without authenticated session", async () => {

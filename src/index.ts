@@ -34,7 +34,13 @@ export {
   DEFAULT_CONFIG_PATH,
   DEFAULT_HUGLO_OAUTH_ISSUER,
   DEFAULT_HUGLO_OAUTH_SCOPES,
+  OAUTH_PKCE_COOKIE,
+  generateCodeVerifier,
+  generateCodeChallenge,
+  createPkceCookie,
+  readPkceCookie,
 } from "./module.js";
+export type { OAuthPkceParams } from "./module.js";
 export type {
   EmitterManifestEntry,
   EmitterDefinition,

@@ -54,7 +54,13 @@ export {
   resolveOAuthOptions,
   DEFAULT_HUGLO_OAUTH_ISSUER,
   DEFAULT_HUGLO_OAUTH_SCOPES,
+  OAUTH_PKCE_COOKIE,
+  generateCodeVerifier,
+  generateCodeChallenge,
+  createPkceCookie,
+  readPkceCookie,
 } from "./oauth.js";
+export type { OAuthPkceParams } from "./oauth.js";
 export type { OnConfigSaved, OnConfigSavedContext } from "./config-routes.js";
 export { DEFAULT_CONFIG_PATH } from "./config-routes.js";
 export type { ConfigPageTheme } from "./config-page.js";
