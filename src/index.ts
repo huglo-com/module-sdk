@@ -32,6 +32,8 @@ export {
   InMemoryHugloOAuthClient,
   resolveOAuthOptions,
   DEFAULT_CONFIG_PATH,
+  DEFAULT_HUGLO_OAUTH_ISSUER,
+  DEFAULT_HUGLO_OAUTH_SCOPES,
 } from "./module.js";
 export type {
   EmitterManifestEntry,

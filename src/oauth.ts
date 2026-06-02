@@ -3,6 +3,12 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 export const CONFIG_SESSION_COOKIE = "huglo_config_session";
 export const OAUTH_STATE_COOKIE = "huglo_oauth_state";
 
+/** Better Auth OAuth issuer base (foaf-auth: BETTER_AUTH_URL + /api/auth). */
+export const DEFAULT_HUGLO_OAUTH_ISSUER = "https://account.huglo.com/api/auth";
+
+/** Default scopes for config login (matches foaf-auth oauth-test-client). */
+export const DEFAULT_HUGLO_OAUTH_SCOPES = "openid profile email";
+
 export interface OAuthClientOptions {
   clientId: string;
   clientSecret: string;
@@ -10,6 +16,8 @@ export interface OAuthClientOptions {
   authorizeUrl: string;
   tokenUrl: string;
   userInfoUrl: string;
+  /** OAuth scopes on authorize (default: openid profile email). */
+  scopes?: string;
 }
 
 export interface OAuthExchangeResult {
@@ -53,6 +61,10 @@ export class HttpHugloOAuthClient implements HugloOAuthClient {
     url.searchParams.set("client_id", this.options.clientId);
     url.searchParams.set("redirect_uri", this.options.redirectUri);
     url.searchParams.set("state", state);
+    const scopes = this.options.scopes ?? DEFAULT_HUGLO_OAUTH_SCOPES;
+    if (scopes) {
+      url.searchParams.set("scope", scopes);
+    }
     return url.toString();
   }
 
@@ -211,18 +223,22 @@ export function resolveOAuthOptions(
   const clientId = partial?.clientId ?? process.env["HUGLO_OAUTH_CLIENT_ID"];
   const clientSecret = partial?.clientSecret ?? process.env["HUGLO_OAUTH_CLIENT_SECRET"];
   const redirectUri = partial?.redirectUri ?? process.env["HUGLO_OAUTH_REDIRECT_URI"];
+  const issuer =
+    process.env["HUGLO_OAUTH_ISSUER"]?.replace(/\/$/, "") ?? DEFAULT_HUGLO_OAUTH_ISSUER;
   const authorizeUrl =
     partial?.authorizeUrl ??
     process.env["HUGLO_OAUTH_AUTHORIZE_URL"] ??
-    "https://account.huglo.com/oauth/authorize";
+    `${issuer}/oauth2/authorize`;
   const tokenUrl =
     partial?.tokenUrl ??
     process.env["HUGLO_OAUTH_TOKEN_URL"] ??
-    "https://account.huglo.com/oauth/token";
+    `${issuer}/oauth2/token`;
   const userInfoUrl =
     partial?.userInfoUrl ??
     process.env["HUGLO_OAUTH_USERINFO_URL"] ??
-    "https://account.huglo.com/oauth/userinfo";
+    `${issuer}/oauth2/userinfo`;
+  const scopes =
+    partial?.scopes ?? process.env["HUGLO_OAUTH_SCOPES"] ?? DEFAULT_HUGLO_OAUTH_SCOPES;
 
   if (!clientId || !clientSecret || !redirectUri) {
     return undefined;
@@ -235,5 +251,6 @@ export function resolveOAuthOptions(
     authorizeUrl,
     tokenUrl,
     userInfoUrl,
+    scopes,
   };
 }

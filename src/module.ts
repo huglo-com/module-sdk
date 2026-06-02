@@ -52,6 +52,8 @@ export {
   HttpHugloOAuthClient,
   InMemoryHugloOAuthClient,
   resolveOAuthOptions,
+  DEFAULT_HUGLO_OAUTH_ISSUER,
+  DEFAULT_HUGLO_OAUTH_SCOPES,
 } from "./oauth.js";
 export type { OnConfigSaved, OnConfigSavedContext } from "./config-routes.js";
 export { DEFAULT_CONFIG_PATH } from "./config-routes.js";
