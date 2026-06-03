@@ -58,6 +58,7 @@ A module can be holder in one call and requester in another. The SDK supports bo
 | Route | Description |
 |-------|-------------|
 | `GET /health` | Health check |
+| `GET /metrics` | Prometheus scrape endpoint (enabled by default; set `metrics: false` to disable) |
 | `GET /manifest` | Module metadata, scopes (JSON Schema), public key |
 | `GET /.well-known/huglo-challenge` | Registration challenge response (signed) |
 | `GET /grant/init` | Grant check / invite redirect (when `grantStore` is set); query: `subject`, `holder`, `scope` |
@@ -548,6 +549,33 @@ class FilesystemFileStore implements FileStore {
 ```
 
 Example S3 store (not shipped): implement `put`/`get`/`delete` with object keys `files/{token}` and metadata headers for `content_type`, `filename`, and `expires_at`; delete on expired `get`.
+
+## Prometheus metrics
+
+Metrics are **enabled by default**. Each module exposes `GET /metrics` for Prometheus scraping and tracks HTTP requests, invoke outcomes, and file downloads internally. All SDK metrics are prefixed with `huglo_module_` and include a default `module_id` label.
+
+Disable metrics entirely:
+
+```typescript
+const module = new Module({
+  id: "trovi",
+  // ...
+  metrics: false,
+});
+```
+
+Register custom counters, gauges, or histograms on the same registry:
+
+```typescript
+const metrics = module.getMetrics();
+const created = metrics?.counter({
+  name: "invoices_created_total",
+  help: "Total invoices created",
+});
+created?.inc();
+```
+
+`getMetrics()` returns `undefined` when metrics are disabled. For advanced usage, the registry and `Counter` / `Gauge` / `Histogram` types from `prom-client` are re-exported from `@huglo/module-sdk`.
 
 ## Handler context
 

@@ -1,4 +1,7 @@
 export { Module, ModuleError, DEFAULT_HUGLO_DIRECTORY_URL, exchangeAndSaveGrants } from "./module.js";
+export type { ModuleMetrics } from "./metrics.js";
+export { createModuleMetrics } from "./metrics.js";
+export { Counter, Gauge, Histogram, Registry } from "prom-client";
 export type {
   ModuleConfig,
   ScopeOptions,

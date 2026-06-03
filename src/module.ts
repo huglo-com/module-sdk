@@ -34,6 +34,7 @@ import { DEFAULT_CONFIG_PATH } from "./config-routes.js";
 import type { ConfigPageTheme } from "./config-page.js";
 import type { FileStore } from "./file-store.js";
 import { InMemoryFileStore } from "./file-store.js";
+import { createModuleMetrics, type ModuleMetrics } from "./metrics.js";
 import {
   createFileRecord,
   type CreateFileOptions,
@@ -144,6 +145,8 @@ export interface ModuleConfig extends GrantCallbackOptions {
   onConfigSaved?: OnConfigSaved;
   /** Ephemeral file persistence (defaults to in-memory when using createFile()). */
   fileStore?: FileStore;
+  /** Enable Prometheus metrics at GET /metrics (default: true). Set false to opt out. */
+  metrics?: boolean;
 }
 
 export type {
@@ -213,6 +216,7 @@ export class Module {
   private configDefinition: ConfigDefinition | undefined;
   private defaultConfigStore: ConfigStore | undefined;
   private defaultFileStore: InMemoryFileStore | undefined;
+  private readonly moduleMetrics: ModuleMetrics | undefined;
   private app: Hono | null = null;
   private server: ReturnType<typeof serve> | null = null;
   customRoutes: Hono | undefined;
@@ -228,6 +232,8 @@ export class Module {
     this.directory =
       config.directory ??
       new HttpDirectoryClient({ directoryUrl: resolveDirectoryUrl(config) });
+    this.moduleMetrics =
+      config.metrics === false ? undefined : createModuleMetrics(config.id);
   }
 
   /**
@@ -285,9 +291,14 @@ export class Module {
     return this.init.configStore ?? (this.configDefinition ? this.resolveConfigStore() : undefined);
   }
 
-  /** Expose the file store (for tests and custom FileStore implementations). */
+  /** Get the file store (for tests and custom FileStore implementations). */
   getFileStore(): FileStore {
     return this.resolveFileStore();
+  }
+
+  /** Get the Prometheus metrics registry (undefined when metrics are disabled). */
+  getMetrics(): ModuleMetrics | undefined {
+    return this.moduleMetrics;
   }
 
   /**
@@ -393,6 +404,7 @@ export class Module {
       configTheme: this.init.theme,
       onConfigSaved: this.init.onConfigSaved,
       fileStore: this.getFileStoreForServer(),
+      metrics: this.moduleMetrics,
     });
     return this.app;
   }

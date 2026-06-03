@@ -1,9 +1,11 @@
 import type { Hono } from "hono";
 import type { FileStore } from "./file-store.js";
 import { contentDispositionFilename } from "./file.js";
+import type { ModuleMetrics } from "./metrics.js";
 
 export interface FileRoutesOptions {
   fileStore: FileStore;
+  metrics?: ModuleMetrics;
 }
 
 export function mountFileRoutes(app: Hono, options: FileRoutesOptions): void {
@@ -11,8 +13,11 @@ export function mountFileRoutes(app: Hono, options: FileRoutesOptions): void {
     const token = c.req.param("token");
     const file = await options.fileStore.get(token);
     if (!file) {
+      options.metrics?.recordFileDownload("not_found");
       return c.text("Not found", 404);
     }
+
+    options.metrics?.recordFileDownload("success");
 
     const safeName = contentDispositionFilename(file.filename);
     return new Response(file.body, {

@@ -36,6 +36,8 @@ import type { ConfigPageTheme } from "./config-page.js";
 import type { HugloOAuthClient, OAuthClientOptions } from "./oauth.js";
 import type { FileStore } from "./file-store.js";
 import { mountFileRoutes } from "./file-routes.js";
+import type { ModuleMetrics } from "./metrics.js";
+import { mountMetricsRoutes } from "./metrics-routes.js";
 
 export const DEFAULT_CALLBACK_PATH = "/grant/callback";
 export const DEFAULT_GRANT_INIT_PATH = "/grant/init";
@@ -77,6 +79,7 @@ export interface ServerConfig {
   configTheme?: ConfigPageTheme;
   onConfigSaved?: OnConfigSaved;
   fileStore?: FileStore;
+  metrics?: ModuleMetrics;
 }
 
 export type ProtectedScopeHandler<I, O> = (ctx: ProtectedCtx<I>) => Promise<O>;
@@ -93,6 +96,11 @@ export function createModuleServer(options: CreateServerOptions): Hono {
   const nonceCache = options.nonceCache ?? new NonceCache();
 
   app.get("/health", (c) => c.json({ status: "ok", module: options.moduleId }));
+
+  if (options.metrics) {
+    mountMetricsRoutes(app, { metrics: options.metrics });
+    app.use("*", createMetricsMiddleware(options.metrics));
+  }
 
   app.get("/manifest", (c) => {
     const manifest: ModuleManifest = buildManifest(
@@ -154,7 +162,10 @@ export function createModuleServer(options: CreateServerOptions): Hono {
   }
 
   if (options.fileStore) {
-    mountFileRoutes(app, { fileStore: options.fileStore });
+    mountFileRoutes(app, {
+      fileStore: options.fileStore,
+      metrics: options.metrics,
+    });
   }
 
   if (
@@ -179,6 +190,7 @@ export function createModuleServer(options: CreateServerOptions): Hono {
     const urlScope = c.req.param("scope");
     const scopeDef = options.scopes.get(urlScope);
     if (!scopeDef) {
+      options.metrics?.recordInvoke(urlScope, "scope_not_found");
       return c.json(
         buildSignedErrorResponse(
           c.req.header("X-Request-Id") ?? randomUUID(),
@@ -189,10 +201,14 @@ export function createModuleServer(options: CreateServerOptions): Hono {
       );
     }
 
+    const endInvokeTimer = options.metrics?.startInvokeTimer(urlScope);
+
     let rawBody: unknown;
     try {
       rawBody = await c.req.json();
     } catch {
+      endInvokeTimer?.();
+      options.metrics?.recordInvoke(urlScope, "malformed_request");
       return c.json(
         buildSignedErrorResponse(
           c.req.header("X-Request-Id") ?? randomUUID(),
@@ -219,6 +235,8 @@ export function createModuleServer(options: CreateServerOptions): Hono {
     try {
       verified = await verifyInvokeForScope(rawBody, scopeDef, nonceCache, verifyOpts);
     } catch (err) {
+      endInvokeTimer?.();
+      options.metrics?.recordInvoke(urlScope, "verification_failed");
       const normalized = err instanceof ModuleError ? err : authModuleError("verification_failed", "Verification failed");
       const status = normalized.retryable ? 503 : 401;
       return c.json(buildSignedErrorResponse(requestId, normalized, options.privateKey), status);
@@ -229,6 +247,8 @@ export function createModuleServer(options: CreateServerOptions): Hono {
 
       const parsed = scopeDef.output.safeParse(result);
       if (!parsed.success) {
+        endInvokeTimer?.();
+        options.metrics?.recordInvoke(urlScope, "invalid_output");
         return c.json(
           buildSignedErrorResponse(
             requestId,
@@ -239,10 +259,14 @@ export function createModuleServer(options: CreateServerOptions): Hono {
         );
       }
 
+      endInvokeTimer?.();
+      options.metrics?.recordInvoke(urlScope, "success");
       return c.json(
         buildSignedSuccessResponse(requestId, parsed.data, options.privateKey),
       );
     } catch (err) {
+      endInvokeTimer?.();
+      options.metrics?.recordInvoke(urlScope, "handler_error");
       const normalized = normalizeError(err);
       const status = normalized.retryable ? 503 : 400;
       return c.json(
@@ -253,6 +277,16 @@ export function createModuleServer(options: CreateServerOptions): Hono {
   });
 
   return app;
+}
+
+function createMetricsMiddleware(metrics: ModuleMetrics): MiddlewareHandler {
+  return async (c, next) => {
+    const start = performance.now();
+    await next();
+    const durationSeconds = (performance.now() - start) / 1000;
+    const route = c.req.routePath || c.req.path;
+    metrics.recordHttpRequest(c.req.method, route, String(c.res.status), durationSeconds);
+  };
 }
 
 function normalizeMiddleware(
