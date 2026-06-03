@@ -6,7 +6,10 @@ import { Module } from "../src/module.js";
 import {
   assembleConfigValues,
   ConfigAssemblyError,
+  formatInstanceLabel,
+  truncateInstanceId,
 } from "../src/config.js";
+import { buildConfigManifest } from "../src/manifest.js";
 import { InMemoryConfigStore } from "../src/config-store.js";
 import {
   InMemoryHugloOAuthClient,
@@ -101,6 +104,39 @@ describe("config", () => {
           hostValues: {},
         }),
       ).toThrow(ConfigAssemblyError);
+    });
+  });
+
+  describe("formatInstanceLabel", () => {
+    const definition = {
+      schema: ConfigSchema,
+      fields: {
+        target: "locked" as const,
+        scope: "locked" as const,
+        label: "userEntered" as const,
+        hostRef: "hostProvided" as const,
+      },
+    };
+    const manifest = buildConfigManifest(definition);
+
+    it("uses the first schema field value", () => {
+      expect(
+        formatInstanceLabel(
+          { target: "my-target", label: "ignored" },
+          "inst-abcdefgh",
+          manifest.fields,
+        ),
+      ).toBe("my-target");
+    });
+
+    it("falls back to truncated instanceId when first field is empty", () => {
+      expect(
+        formatInstanceLabel({ target: "" }, "inst-abcdefgh", manifest.fields),
+      ).toBe("inst-abc…");
+    });
+
+    it("truncateInstanceId leaves short ids unchanged", () => {
+      expect(truncateInstanceId("short")).toBe("short");
     });
   });
 
@@ -302,9 +338,116 @@ describe("config", () => {
       expect(html).toContain("notifyReady");
       expect(html).toContain("huglo:config:ready");
       expect(html).toContain("window.opener");
-      expect(html).toContain('if (key === "type") continue');
+      expect(html).toContain('entry[0] === "type"');
       expect(html).toContain("huglo:config:saved");
       expect(html).toContain("window.close");
+    });
+
+    it("config page includes selector when authenticated with instances", async () => {
+      const sessionCookie = createConfigSession(
+        "huglo:user:config-user",
+        "test-secret",
+      );
+      await configStore.set({
+        instanceId: "inst-a",
+        subject: "huglo:user:config-user",
+        values: {
+          target: "locked-target",
+          scope: "locked-scope",
+          label: "Alpha",
+          hostRef: "h1",
+        },
+      });
+      await configStore.set({
+        instanceId: "inst-b",
+        subject: "huglo:user:config-user",
+        values: {
+          target: "locked-target",
+          scope: "locked-scope",
+          label: "Beta",
+          hostRef: "h2",
+        },
+      });
+
+      const res = await mod.getApp().request("/config", {
+        headers: { Cookie: `${CONFIG_SESSION_COOKIE}=${sessionCookie}` },
+      });
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain('id="config-select"');
+      expect(html).toContain('value="__new__"');
+      expect(html).toContain("New configuration");
+      expect(html).toContain('id="delete-btn"');
+      expect(html).toContain("disableSelector");
+      expect(html).toContain("HOST_PROVIDED_FIELDS");
+      expect(html).toContain("inst-a");
+      expect(html).toContain("inst-b");
+    });
+
+    it("DELETE /config/instances/:id requires authentication", async () => {
+      const res = await mod.getApp().request("/config/instances/inst-a", {
+        method: "DELETE",
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("DELETE /config/instances/:id returns 404 for unknown instance", async () => {
+      const sessionCookie = createConfigSession(
+        "huglo:user:config-user",
+        "test-secret",
+      );
+      const res = await mod.getApp().request("/config/instances/unknown-id", {
+        method: "DELETE",
+        headers: { Cookie: `${CONFIG_SESSION_COOKIE}=${sessionCookie}` },
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("DELETE /config/instances/:id returns 403 for wrong subject", async () => {
+      await configStore.set({
+        instanceId: "inst-other",
+        subject: "huglo:user:someone-else",
+        values: {
+          target: "locked-target",
+          scope: "locked-scope",
+          label: "Other",
+          hostRef: "h",
+        },
+      });
+      const sessionCookie = createConfigSession(
+        "huglo:user:config-user",
+        "test-secret",
+      );
+      const res = await mod.getApp().request("/config/instances/inst-other", {
+        method: "DELETE",
+        headers: { Cookie: `${CONFIG_SESSION_COOKIE}=${sessionCookie}` },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("DELETE /config/instances/:id removes owned instance", async () => {
+      await configStore.set({
+        instanceId: "inst-delete-me",
+        subject: "huglo:user:config-user",
+        values: {
+          target: "locked-target",
+          scope: "locked-scope",
+          label: "Delete me",
+          hostRef: "h",
+        },
+      });
+      const sessionCookie = createConfigSession(
+        "huglo:user:config-user",
+        "test-secret",
+      );
+      const res = await mod.getApp().request("/config/instances/inst-delete-me", {
+        method: "DELETE",
+        headers: { Cookie: `${CONFIG_SESSION_COOKIE}=${sessionCookie}` },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean };
+      expect(body.ok).toBe(true);
+      expect(await configStore.get("inst-delete-me")).toBeNull();
     });
 
     it("login redirect includes code_challenge", async () => {

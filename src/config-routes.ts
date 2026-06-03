@@ -3,7 +3,7 @@ import type { Context } from "hono";
 import { randomUUID } from "node:crypto";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { ConfigDefinition } from "./config.js";
-import { assembleConfigValues, ConfigAssemblyError } from "./config.js";
+import { assembleConfigValues, ConfigAssemblyError, formatInstanceLabel } from "./config.js";
 import type { ConfigStore } from "./config-store.js";
 import type { ConfigManifestEntry } from "./manifest.js";
 import { buildConfigManifest } from "./manifest.js";
@@ -136,6 +136,9 @@ export function mountConfigRoutes(app: Hono, options: ConfigRoutesOptions): void
   });
 
   app.post(`${configPath}/intake`, async (c) => handleIntake(c, options));
+  app.delete(`${configPath}/instances/:instanceId`, async (c) =>
+    handleDeleteInstance(c, options),
+  );
 }
 
 async function serveConfigPage(
@@ -158,6 +161,24 @@ async function serveConfigPage(
     }
   }
 
+  let instances: Array<{
+    instanceId: string;
+    label: string;
+    values: Record<string, unknown>;
+  }> = [];
+  if (subject) {
+    const raw = await options.configStore.listBySubject(subject);
+    instances = raw
+      .map((inst) => ({
+        instanceId: inst.instanceId,
+        label: formatInstanceLabel(inst.values, inst.instanceId, manifest.fields),
+        values: inst.values,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+  const labelField = manifest.fields[0]?.name ?? null;
+
   return c.html(
     configPageHtml({
       manifest,
@@ -165,6 +186,8 @@ async function serveConfigPage(
       authenticated: !!subject,
       instanceId: editId,
       existingValues,
+      instances,
+      labelField,
       theme: options.theme,
     }),
   );
@@ -237,6 +260,31 @@ async function handleIntake(
   }
 
   return c.json({ instanceId });
+}
+
+async function handleDeleteInstance(
+  c: Context,
+  options: ConfigRoutesOptions,
+): Promise<Response> {
+  const subject = readConfigSession(
+    getCookie(c, CONFIG_SESSION_COOKIE),
+    options.oauthOptions.clientSecret,
+  );
+  if (!subject) {
+    return c.json({ error: "Authentication required" }, 401);
+  }
+
+  const instanceId = c.req.param("instanceId");
+  const existing = await options.configStore.get(instanceId);
+  if (!existing) {
+    return c.json({ error: "Instance not found" }, 404);
+  }
+  if (existing.subject !== subject) {
+    return c.json({ error: "Forbidden" }, 403);
+  }
+
+  await options.configStore.delete(instanceId);
+  return c.json({ ok: true });
 }
 
 function normalizePath(path: string): string {

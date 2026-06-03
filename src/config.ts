@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ConfigManifestFieldEntry } from "./manifest.js";
 
 export type FieldSource = "locked" | "hostProvided" | "userEntered";
 
@@ -99,4 +100,23 @@ export class ConfigAssemblyError extends Error {
     super(message);
     this.name = "ConfigAssemblyError";
   }
+}
+
+/** Short display id when the label field is empty. */
+export function truncateInstanceId(instanceId: string): string {
+  if (instanceId.length <= 8) return instanceId;
+  return `${instanceId.slice(0, 8)}…`;
+}
+
+/** Deterministic label from the first schema field, else truncated instanceId. */
+export function formatInstanceLabel(
+  values: Record<string, unknown>,
+  instanceId: string,
+  fields: ConfigManifestFieldEntry[],
+): string {
+  const first = fields[0];
+  if (!first) return truncateInstanceId(instanceId);
+  const v = values[first.name];
+  if (typeof v === "string" && v.trim() !== "") return v;
+  return truncateInstanceId(instanceId);
 }
