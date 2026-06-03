@@ -2,13 +2,17 @@ import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { FileStore } from "./file-store.js";
 
-export const FileSchema = z.object({
+const fileObjectSchema = z.object({
   url: z.string().min(1),
   content_type: z.string().min(1),
   filename: z.string().min(1),
   size: z.number().int().nonnegative(),
   expires_at: z.iso.datetime(),
 });
+
+export const FileSchema = fileObjectSchema;
+// Huglo manifest extension (not standard JSON Schema); runtime validation uses fileObjectSchema.
+FileSchema._zod.toJSONSchema = () => ({ type: "file" });
 
 export type File = z.infer<typeof FileSchema>;
 

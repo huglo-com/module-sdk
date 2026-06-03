@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { z } from "zod";
 import { generateKeyPair } from "../src/keys.js";
 import { Module } from "../src/module.js";
 import { FileSchema } from "../src/file.js";
 import { InMemoryFileStore } from "../src/file-store.js";
+import type { ModuleManifest } from "../src/manifest.js";
 
 describe("file storage", () => {
   let module: Module;
@@ -28,6 +30,46 @@ describe("file storage", () => {
 
   afterAll(() => {
     module.close();
+  });
+
+  it("emits { type: file } in toJSONSchema", () => {
+    const jsonSchema = z.toJSONSchema(FileSchema, { io: "output" });
+    expect(jsonSchema).toMatchObject({ type: "file" });
+    expect(jsonSchema).not.toHaveProperty("properties");
+  });
+
+  it("lists file type in /manifest when used as scope output", async () => {
+    const keys = generateKeyPair();
+    const p = port + 4;
+    const mod = new Module({
+      id: "file-manifest",
+      name: "File manifest",
+      description: "Test",
+      version: "1.0.0",
+      keyPair: keys,
+      endpoint: `http://127.0.0.1:${p}`,
+    });
+
+    mod.scope("files:upload", {
+      description: "Upload a file",
+      input: z.object({}),
+      output: FileSchema,
+      handler: async () => {
+        throw new Error("not invoked in this test");
+      },
+    });
+
+    await mod.listen(p);
+    try {
+      const res = await fetch(`http://127.0.0.1:${p}/manifest`);
+      expect(res.status).toBe(200);
+      const manifest = (await res.json()) as ModuleManifest;
+      const scope = manifest.scopes.find((s) => s.name === "files:upload");
+      expect(scope?.output).toMatchObject({ type: "file" });
+      expect(scope?.output).not.toHaveProperty("properties");
+    } finally {
+      mod.close();
+    }
   });
 
   it("creates a file from data and serves it", async () => {

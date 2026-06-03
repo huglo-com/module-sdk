@@ -456,6 +456,8 @@ Returned shape (`FileSchema`):
 }
 ```
 
+At runtime, `FileSchema` validates that full object. In `/manifest` (and `z.toJSONSchema(FileSchema)`), it appears as Huglo's extended type `{ "type": "file" }` — use `FileSchema` in scope `input`/`output` so requesters see the file type instead of individual fields.
+
 Downloads are **unauthenticated** — anyone with the URL can fetch until expiry. Use short TTLs for sensitive content.
 
 ### FileStore (developer implements)
