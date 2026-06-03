@@ -275,6 +275,10 @@ async function handleDeleteInstance(
   }
 
   const instanceId = c.req.param("instanceId");
+  if (!instanceId) {
+    return c.json({ error: "Instance not found" }, 404);
+  }
+
   const existing = await options.configStore.get(instanceId);
   if (!existing) {
     return c.json({ error: "Instance not found" }, 404);
