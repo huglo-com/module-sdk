@@ -81,6 +81,19 @@ export {
 } from "./module.js";
 export { loadKeyPair, generateKeyPair } from "./keys.js";
 export type { ModuleKeyPair } from "./keys.js";
+export {
+  openConfigPopup,
+  buildConfigUrl,
+  isConfigReadyMessage,
+  parseConfigSavedMessage,
+  CONFIG_READY_MESSAGE,
+  CONFIG_SAVED_MESSAGE,
+  DEFAULT_CONFIG_POPUP_FEATURES,
+} from "./config-opener.js";
+export type {
+  OpenConfigPopupOptions,
+  ConfigPopupWindow,
+} from "./config-opener.js";
 
 
 // The following functions are exported only for testing purposes, they should not be used in the production code

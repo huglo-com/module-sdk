@@ -418,6 +418,38 @@ The SDK calls `save` from the callback route when `grantStore` is configured. `f
 
 The invite payload is signed with this module's Ed25519 private key (`JCS(payload)`). Huglo verifies the signature before issuing the `inviteUrl`.
 
+## Module configuration (popup)
+
+When a module declares `module.config(...)`, the SDK serves a default config page at `{endpoint}{configPath}` (default `/config`), or the URL in manifest `configPageUrl` if overridden. A host app (e.g. flow builder) opens that page in a popup to collect per-instance settings.
+
+### Browser popup flow (host app)
+
+Use `openConfigPopup` from the SDK (or implement the same `postMessage` contract):
+
+```typescript
+import { openConfigPopup } from "@huglo/module-sdk";
+
+openConfigPopup({
+  configUrl: "https://your-module.example.com/config",
+  flowId: "…",
+  nodeId: "…",
+  configInstanceId: "…", // optional, when editing
+  onSaved: (instanceId) => {
+    // store opaque instanceId on the flow node
+  },
+});
+```
+
+Sequence:
+
+1. Host opens the config URL in a centered popup.
+2. Config page posts `{ type: "huglo:config:ready" }` to `window.opener` (or `window.parent` when embedded in an iframe).
+3. Host listens for `huglo:config:ready`, validates `event.origin` against the config URL origin and `event.source === popup`, then posts `{ flowId, nodeId }` once per ready (field names must match `hostProvided` fields in the module schema).
+4. After OAuth login the page reloads and emits ready again — the host should post host values again on each ready.
+5. On save, the config page posts `{ type: "huglo:config:saved", instanceId: string }` to the opener and closes.
+
+The module config page sends `"*"` as `targetOrigin`; the host **must** validate `event.origin`. Prefer `openConfigPopup`, which enforces origin and popup source checks.
+
 ## File storage
 
 Modules can create short-lived files and serve them at public URLs until `expires_at`. After expiry, `GET /file/:token` returns 404 and the file is removed from the store.

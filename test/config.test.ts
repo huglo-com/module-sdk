@@ -295,11 +295,14 @@ describe("config", () => {
       );
     });
 
-    it("config page notifies opener on save", async () => {
+    it("config page notifies opener on ready and save", async () => {
       const res = await mod.getApp().request("/config");
       expect(res.status).toBe(200);
       const html = await res.text();
+      expect(html).toContain("notifyReady");
+      expect(html).toContain("huglo:config:ready");
       expect(html).toContain("window.opener");
+      expect(html).toContain('if (key === "type") continue');
       expect(html).toContain("huglo:config:saved");
       expect(html).toContain("window.close");
     });

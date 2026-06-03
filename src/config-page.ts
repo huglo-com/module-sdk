@@ -173,14 +173,21 @@ export function configPageHtml(options: ConfigPageOptions): string {
       const data = event.data;
       if (!data || typeof data !== "object" || Array.isArray(data)) return;
       for (const [key, value] of Object.entries(data)) {
+        if (key === "type") continue;
         hostValues[key] = value;
       }
       renderFields();
     });
 
-    if (window.parent !== window) {
-      window.parent.postMessage({ type: "huglo:config:ready" }, "*");
+    function notifyReady() {
+      var msg = { type: "huglo:config:ready" };
+      if (window.opener) {
+        window.opener.postMessage(msg, "*");
+      } else if (window.parent !== window) {
+        window.parent.postMessage(msg, "*");
+      }
     }
+    notifyReady();
 
     document.getElementById("config-form").addEventListener("submit", async (e) => {
       e.preventDefault();
