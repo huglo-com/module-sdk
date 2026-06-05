@@ -72,7 +72,7 @@ describe("verify", () => {
     return req;
   }
 
-  it("passes all 10 verification steps for a valid request", async () => {
+  it("passes all 11 verification steps for a valid request", async () => {
     const grant = buildGrant();
     const req = buildRequest(grant, { amount: 100, vendor: "Acme" });
 
@@ -165,6 +165,24 @@ describe("verify", () => {
         directory,
       }),
     ).rejects.toMatchObject({ code: "invalid_grant_signature" });
+  });
+
+  it("rejects grant when author does not match subject", async () => {
+    directory.registerUser("user-other", authorKeys.publicKey);
+    const grant = buildGrant({
+      subject: "huglo:user:user-abc",
+      author: "huglo:user:user-other",
+    });
+    const req = buildRequest(grant, { amount: 1, vendor: "x" });
+
+    await expect(
+      verifyInvokeRequest(req, nonceCache, {
+        moduleId: "trovi",
+        urlScope: "invoices:write",
+        inputSchema,
+        directory,
+      }),
+    ).rejects.toMatchObject({ code: "grant_author_mismatch" });
   });
 
   it("rejects expired grant", async () => {
