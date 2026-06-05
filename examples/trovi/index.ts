@@ -2,14 +2,14 @@ import "dotenv/config";
 import { z } from "zod";
 import { Module, ModuleError, InMemoryGrantStore, loadKeyPair } from "../../dist/index.js";
 
-// Registration challenge: set MODULE_CHALLENGE and MODULE_ENDPOINT in .env (see .env.example)
-
+// Invoice input schema
 const InvoiceInputSchema = z.object({
   vendor: z.string(),
   amount: z.number().int(),
   currency: z.string().length(3),
 });
 
+// Invoice output schema
 const InvoiceOutputSchema = z.object({
   id: z.string(),
   vendor: z.string(),
@@ -18,9 +18,10 @@ const InvoiceOutputSchema = z.object({
   status: z.enum(["draft", "sent"]),
 });
 
-/** In-memory invoice store for the example. */
+// In-memory invoice store for the example.
 const invoices = new Map<string, z.infer<typeof InvoiceOutputSchema>>();
 
+// Dry-run example invoice
 function computeWouldBeInvoice(
   input: z.infer<typeof InvoiceInputSchema>,
 ): z.infer<typeof InvoiceOutputSchema> {
@@ -33,8 +34,11 @@ function computeWouldBeInvoice(
   };
 }
 
+// In-memory grant store for the example.
+// For production, use a database or a file system and implement the GrantStore interface.
 const grantStore = new InMemoryGrantStore();
 
+// Module instance
 const module = new Module({
   id: "trovi-test",
   name: "Trovi Invoicing",
@@ -44,15 +48,27 @@ const module = new Module({
   grantStore,
 });
 
+// Register a invoices:write scope
 module.scope("invoices:write", {
   description: "Create an invoice",
   input: InvoiceInputSchema,
   output: InvoiceOutputSchema,
+  // handler can be any function that returns a promise of the output schema
   handler: async (ctx) => {
+
+    // ctx is the context object for the scope
+    // ctx.input
+    // ctx.dryRun
+    // ctx.grant
+    // ctx.caller
+    // ctx.subject
+
+    // If the request is a dry run, return the computed invoice
     if (ctx.dryRun) {
       return computeWouldBeInvoice(ctx.input);
     }
 
+    // The actual business logic for creating an invoice
     const existing = [...invoices.values()].find(
       (inv) => inv.vendor === ctx.input.vendor && inv.amount === ctx.input.amount,
     );
@@ -72,14 +88,13 @@ module.scope("invoices:write", {
       status: "draft",
     };
     invoices.set(invoice.id, invoice);
+
+    // Return InvoiceOutputSchema
     return invoice;
   },
 });
 
+// Start the module on port 3200
 const port = Number(process.env["PORT"] ?? 3200);
 await module.listen(port);
 console.log(`Trovi module listening on http://localhost:${port}`);
-console.log(`  GET  /health`);
-console.log(`  GET  /manifest`);
-console.log(`  GET  /grant/callback`);
-console.log(`  POST /invoke/invoices:write`);
