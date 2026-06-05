@@ -11,6 +11,10 @@
     "sonar": "dotenv -- sonar",
     "sonar:ci": "npm run test:coverage && npm run sonar"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/huglo-com/module-sdk.git"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
