@@ -160,7 +160,24 @@ async function verifyModuleSignature(
   }
 }
 
-/** Step 5: Verify Sig 1 (author/subject). */
+/** Step 5: Grant author must be the subject (user self-authorization only). */
+function verifyGrantAuthorIsSubject(grant: SignedGrant["grant"]): void {
+  const { author, subject } = grant;
+  if (!author.startsWith("huglo:user:") || !subject.startsWith("huglo:user:")) {
+    throw authError(
+      "invalid_grant_subject",
+      "Grant author and subject must be user identifiers",
+    );
+  }
+  if (author !== subject) {
+    throw authError(
+      "grant_author_mismatch",
+      "Grant author must match subject",
+    );
+  }
+}
+
+/** Step 6: Verify Sig 1 (user author/subject). */
 async function verifyGrantSignature(
   grant: SignedGrant,
   directory: DirectoryClient,
@@ -169,9 +186,7 @@ async function verifyGrantSignature(
   try {
     const parsed = parseSignature(grant.signature);
     const authorId = grant.grant.author;
-    authorKey = authorId.startsWith("huglo:user:")
-      ? await directory.getUserKey(authorId, parsed.keyId)
-      : await directory.getModuleKey(authorId, parsed.keyId);
+    authorKey = await directory.getUserKey(authorId, parsed.keyId);
   } catch (err) {
     rethrowDirectoryError(err, "Unable to fetch author public key");
   }
@@ -181,7 +196,7 @@ async function verifyGrantSignature(
   }
 }
 
-/** Step 6: Grant validity window. */
+/** Step 7: Grant validity window. */
 function verifyGrantValidityWindow(
   grant: SignedGrant["grant"],
   now = Date.now(),
@@ -196,7 +211,7 @@ function verifyGrantValidityWindow(
   }
 }
 
-/** Step 7: Binding checks (holder, scope, requester). */
+/** Step 8: Binding checks (holder, scope, requester). */
 function verifyBindings(req: InvokeRequest, options: VerifyOptions): void {
   if (req.grant.grant.holder !== options.moduleId) {
     throw authError("grant_holder_mismatch", "Grant holder does not match this module");
@@ -210,7 +225,7 @@ function verifyBindings(req: InvokeRequest, options: VerifyOptions): void {
   // grant.requester is enforced by fetching key by grant.requester in step 4
 }
 
-/** Step 8: Constraints — fail closed on unknown keys. */
+/** Step 9: Constraints — fail closed on unknown keys. */
 function verifyConstraints(
   constraints: Record<string, unknown>,
   knownConstraints?: Set<string>,
@@ -226,7 +241,7 @@ function verifyConstraints(
   }
 }
 
-/** Step 9: Revocation check. */
+/** Step 10: Revocation check. */
 async function verifyNotRevoked(
   grantId: string,
   directory: DirectoryClient,
@@ -242,7 +257,7 @@ async function verifyNotRevoked(
   }
 }
 
-/** Step 10: Validate payload against input schema. */
+/** Step 11: Validate payload against input schema. */
 function validatePayload<I>(payload: unknown, inputSchema: z.ZodType): I {
   try {
     return inputSchema.parse(payload) as I;
@@ -252,17 +267,18 @@ function validatePayload<I>(payload: unknown, inputSchema: z.ZodType): I {
 }
 
 /**
- * Holder verification sequence (10 steps, in order):
+ * Holder verification sequence (11 steps, in order):
  * 1. Parse envelope
  * 2. Timestamp within ±5 min
  * 3. Nonce unseen (replay protection)
  * 4. Verify Sig 2 (requester)
- * 5. Verify Sig 1 (author/subject)
- * 6. Grant validity window
- * 7. Binding checks (holder, scope, requester)
- * 8. Constraints (fail closed on unknown keys)
- * 9. Revocation check
- * 10. Validate payload against input schema
+ * 5. Grant author/subject must be matching user identifiers
+ * 6. Verify Sig 1 (user author)
+ * 7. Grant validity window
+ * 8. Binding checks (holder, scope, requester)
+ * 9. Constraints (fail closed on unknown keys)
+ * 10. Revocation check
+ * 11. Validate payload against input schema
  */
 export async function verifyInvokeRequest<I>(
   rawBody: unknown,
@@ -275,6 +291,7 @@ export async function verifyInvokeRequest<I>(
   verifyTimestamp(req.timestamp, now);
   verifyNonce(nonceCache, req.nonce);
   await verifyRequestSignature(req, options.directory);
+  verifyGrantAuthorIsSubject(req.grant.grant);
   await verifyGrantSignature(req.grant, options.directory);
   verifyGrantValidityWindow(req.grant.grant, now);
   verifyBindings(req, options);

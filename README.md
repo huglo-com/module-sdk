@@ -114,7 +114,7 @@ module.scope("status:read", {
 
 ## Learn more
 
-- [`HUGLO_SPECIFICATION.md`](HUGLO_SPECIFICATION.md) — protocol and Huglo server contracts (GitHub repo)
+- [`HUGLO_SPECIFICATION.md`](HUGLO_SPECIFICATION.md) — federation protocol and directory API
 - [`examples/trovi/`](examples/trovi/) — full runnable example (GitHub repo)
 
 ## License
