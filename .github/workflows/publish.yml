@@ -1,0 +1,33 @@
+name: Publish Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false  # never use caching in release builds
+      - run: npm ci
+      - run: npm run build --if-present
+      - run: npm test
+      - name: Publish if version is new
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view @huglo/module-sdk@"$VERSION" version 2>/dev/null; then
+            echo "Version $VERSION already on npm - skipping publish"
+            exit 0
+          fi
+          npm publish --access public
