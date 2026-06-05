@@ -536,5 +536,181 @@ describe("config", () => {
       expect(afterEdit?.values.label).toBe("updated");
       expect(afterEdit?.values.hostRef).toBe("host-2");
     });
+
+    it("OAuth callback happy path sets session and redirects to config", async () => {
+      const loginRes = await mod.getApp().request("/config/login", { redirect: "manual" });
+      expect(loginRes.status).toBe(302);
+
+      const location = new URL(loginRes.headers.get("Location")!);
+      const state = location.searchParams.get("state");
+      expect(state).toBeTruthy();
+
+      const setCookies = loginRes.headers.getSetCookie?.() ?? [loginRes.headers.get("Set-Cookie") ?? ""];
+      const cookieHeader = setCookies
+        .flatMap((c) => c.split(/,(?=[^;]+=)/))
+        .map((c) => c.trim().split(";")[0])
+        .join("; ");
+
+      oauthClient.setCode("oauth-success-code", "huglo:user:config-user");
+
+      const callbackRes = await mod.getApp().request(
+        `/config/callback?code=oauth-success-code&state=${state}`,
+        {
+          redirect: "manual",
+          headers: { Cookie: cookieHeader },
+        },
+      );
+
+      expect(callbackRes.status).toBe(302);
+      expect(callbackRes.headers.get("Location")).toBe("/config");
+      const sessionCookies = callbackRes.headers.getSetCookie?.() ?? [
+        callbackRes.headers.get("Set-Cookie") ?? "",
+      ];
+      expect(sessionCookies.join("; ")).toContain(CONFIG_SESSION_COOKIE);
+    });
+
+    it("login redirects to config when session already exists", async () => {
+      const sessionCookie = createConfigSession("huglo:user:config-user", "test-secret");
+      const res = await mod.getApp().request("/config/login", {
+        redirect: "manual",
+        headers: { Cookie: `${CONFIG_SESSION_COOKIE}=${sessionCookie}` },
+      });
+      expect(res.status).toBe(302);
+      expect(res.headers.get("Location")).toBe("/config");
+    });
+
+    it("intake edit returns 404 for unknown instance", async () => {
+      const sessionCookie = createConfigSession("huglo:user:config-user", "test-secret");
+      const res = await mod.getApp().request("/config/intake", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `${CONFIG_SESSION_COOKIE}=${sessionCookie}`,
+        },
+        body: JSON.stringify({
+          instanceId: "does-not-exist",
+          userValues: { label: "x" },
+          hostValues: { hostRef: "h" },
+        }),
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("intake edit returns 403 for instance owned by another subject", async () => {
+      await configStore.set({
+        instanceId: "inst-other-user",
+        subject: "huglo:user:someone-else",
+        values: {
+          target: "locked-target",
+          scope: "locked-scope",
+          label: "Other",
+          hostRef: "h",
+        },
+      });
+
+      const sessionCookie = createConfigSession("huglo:user:config-user", "test-secret");
+      const res = await mod.getApp().request("/config/intake", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `${CONFIG_SESSION_COOKIE}=${sessionCookie}`,
+        },
+        body: JSON.stringify({
+          instanceId: "inst-other-user",
+          userValues: { label: "stolen" },
+          hostValues: { hostRef: "h" },
+        }),
+      });
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe("onConfigSaved hook", () => {
+    const keys = generateKeyPair();
+    const directory = new InMemoryDirectoryClient();
+    const configStore = new InMemoryConfigStore();
+    const oauthClient = new InMemoryHugloOAuthClient({
+      defaultSubject: "huglo:user:hook-user",
+    });
+    const port = 9400 + Math.floor(Math.random() * 1000);
+    const savedCalls: Array<{ isNew: boolean; instanceId: string }> = [];
+
+    const hookMod = new Module({
+      id: "hook-module",
+      name: "Hook Module",
+      description: "Config hook test",
+      version: "1.0.0",
+      keyPair: keys,
+      directory,
+      configStore,
+      oauthClient,
+      oauth: {
+        clientId: "test-client",
+        clientSecret: "test-secret",
+        redirectUri: `http://127.0.0.1:${port}/config/callback`,
+        authorizeUrl: "https://oauth.test/authorize",
+        tokenUrl: "https://oauth.test/token",
+        userInfoUrl: "https://oauth.test/userinfo",
+      },
+      onConfigSaved: async ({ isNew, instanceId }) => {
+        savedCalls.push({ isNew, instanceId });
+      },
+    });
+
+    hookMod.config({
+      schema: ConfigSchema,
+      fields: {
+        target: "locked",
+        scope: "locked",
+        label: "userEntered",
+        hostRef: "hostProvided",
+      },
+      lockedValues: { target: "t", scope: "s" },
+    });
+
+    beforeAll(async () => {
+      directory.registerModule("hook-module", `http://127.0.0.1:${port}`, keys.publicKey, keys.publicKeyBase64);
+      await hookMod.listen(port, "127.0.0.1");
+    });
+
+    afterAll(() => {
+      hookMod.close();
+    });
+
+    it("invokes onConfigSaved with isNew true on create and false on edit", async () => {
+      savedCalls.length = 0;
+      const sessionCookie = createConfigSession("huglo:user:hook-user", "test-secret");
+
+      const createRes = await hookMod.getApp().request("/config/intake", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `${CONFIG_SESSION_COOKIE}=${sessionCookie}`,
+        },
+        body: JSON.stringify({
+          userValues: { label: "new" },
+          hostValues: { hostRef: "h1" },
+        }),
+      });
+      const created = (await createRes.json()) as { instanceId: string };
+
+      await hookMod.getApp().request("/config/intake", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `${CONFIG_SESSION_COOKIE}=${sessionCookie}`,
+        },
+        body: JSON.stringify({
+          instanceId: created.instanceId,
+          userValues: { label: "edited" },
+          hostValues: { hostRef: "h2" },
+        }),
+      });
+
+      expect(savedCalls).toEqual([
+        { isNew: true, instanceId: created.instanceId },
+        { isNew: false, instanceId: created.instanceId },
+      ]);
+    });
   });
 });

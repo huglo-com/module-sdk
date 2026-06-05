@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import type { FileStore } from "./file-store.js";
-import { contentDispositionFilename } from "./file.js";
+import { buildContentDisposition } from "./file.js";
 import type { ModuleMetrics } from "./metrics.js";
 
 export interface FileRoutesOptions {
@@ -19,12 +19,11 @@ export function mountFileRoutes(app: Hono, options: FileRoutesOptions): void {
 
     options.metrics?.recordFileDownload("success");
 
-    const safeName = contentDispositionFilename(file.filename);
     return new Response(file.body, {
       status: 200,
       headers: {
         "Content-Type": file.content_type,
-        "Content-Disposition": `inline; filename="${safeName}"`,
+        "Content-Disposition": buildContentDisposition(file.filename),
         "Cache-Control": "no-store",
       },
     });

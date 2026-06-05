@@ -91,12 +91,29 @@ describe("file storage", () => {
     const res = await fetch(file.url);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/plain");
+    expect(res.headers.get("content-disposition")).toBe("inline; filename=hello.txt");
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.text()).toBe("hello file");
 
     const store = module.getFileStore();
     const stored = await store.get(token!);
     expect(stored?.filename).toBe("hello.txt");
+  });
+
+  it("serves unicode filename via filename* in Content-Disposition", async () => {
+    const file = await module.createFile({
+      data: Buffer.from("unicode"),
+      content_type: "text/plain",
+      filename: "résumé.pdf",
+      expires_at: new Date(Date.now() + 3600_000),
+    });
+
+    const res = await fetch(file.url);
+    expect(res.status).toBe(200);
+    const disposition = res.headers.get("content-disposition");
+    expect(disposition).toContain("inline");
+    expect(disposition).toContain("filename*=UTF-8''");
+    expect(disposition).toContain("r%C3%A9sum%C3%A9.pdf");
   });
 
   it("returns 404 for expired files", async () => {

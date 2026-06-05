@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   buildConfigUrl,
   isConfigReadyMessage,
@@ -6,6 +6,7 @@ import {
   openConfigPopup,
   CONFIG_READY_MESSAGE,
   CONFIG_SAVED_MESSAGE,
+  DEFAULT_CONFIG_POPUP_FEATURES,
 } from "../src/config-opener.js";
 
 describe("config-opener", () => {
@@ -82,10 +83,25 @@ describe("config-opener", () => {
             listeners.push(handler);
           },
         ),
-        removeEventListener: vi.fn(),
+        removeEventListener: vi.fn(
+          (_type: string, handler: MessageHandler) => {
+            const index = listeners.indexOf(handler);
+            if (index >= 0) {
+              listeners.splice(index, 1);
+            }
+          },
+        ),
         listeners,
       };
     }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
     it("returns null when popup is blocked", () => {
       const browser = mockBrowser(null);
@@ -167,6 +183,76 @@ describe("config-opener", () => {
       });
 
       expect(postMessage).not.toHaveBeenCalled();
+      expect(onSaved).not.toHaveBeenCalled();
+    });
+
+    it("opens edit URL when configInstanceId is provided", () => {
+      const popup = { closed: false, postMessage: vi.fn() };
+      const browser = mockBrowser(popup);
+
+      openConfigPopup(
+        {
+          configUrl: "https://mod.example/config",
+          flowId: "flow-1",
+          nodeId: "node-1",
+          configInstanceId: "inst-edit",
+          onSaved: () => {},
+        },
+        browser,
+      );
+
+      expect(browser.open).toHaveBeenCalledWith(
+        "https://mod.example/config?instanceId=inst-edit",
+        "_blank",
+        DEFAULT_CONFIG_POPUP_FEATURES,
+      );
+    });
+
+    it("uses custom popupFeatures when provided", () => {
+      const popup = { closed: false, postMessage: vi.fn() };
+      const browser = mockBrowser(popup);
+      const features = "width=800,height=600";
+
+      openConfigPopup(
+        {
+          configUrl: "https://mod.example/config",
+          flowId: "flow-1",
+          nodeId: "node-1",
+          onSaved: () => {},
+          popupFeatures: features,
+        },
+        browser,
+      );
+
+      expect(browser.open).toHaveBeenCalledWith(
+        "https://mod.example/config",
+        "_blank",
+        features,
+      );
+    });
+
+    it("cleans up listener when popup is closed without saved message", () => {
+      const popup = { closed: false, postMessage: vi.fn() };
+      const browser = mockBrowser(popup);
+      const onSaved = vi.fn();
+
+      openConfigPopup(
+        {
+          configUrl: "https://mod.example/config",
+          flowId: "flow-1",
+          nodeId: "node-1",
+          onSaved,
+        },
+        browser,
+      );
+
+      expect(browser.listeners).toHaveLength(1);
+
+      popup.closed = true;
+      vi.advanceTimersByTime(800);
+
+      expect(browser.removeEventListener).toHaveBeenCalled();
+      expect(browser.listeners).toHaveLength(0);
       expect(onSaved).not.toHaveBeenCalled();
     });
   });

@@ -1,6 +1,5 @@
 import { z } from "zod";
-import type { ConfigDefinition } from "./config.js";
-import type { FieldSource } from "./config.js";
+import type { ConfigDefinition, FieldSource } from "./config.js";
 
 export interface ScopeManifestEntry {
   name: string;

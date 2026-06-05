@@ -156,7 +156,7 @@ async function serveConfigPage(
   let existingValues: Record<string, unknown> | undefined;
   if (editId && subject) {
     const existing = await options.configStore.get(editId);
-    if (existing && existing.subject === subject) {
+    if (existing?.subject === subject) {
       existingValues = existing.values;
     }
   }

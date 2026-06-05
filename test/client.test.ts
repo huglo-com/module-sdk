@@ -67,6 +67,18 @@ describe("client", () => {
     ).rejects.toMatchObject({ code: "grant_scope_mismatch" });
   });
 
+  it("rejects when target endpoint cannot be resolved", async () => {
+    const emptyDirectory = new InMemoryDirectoryClient();
+    const grant = buildGrant();
+
+    await expect(
+      callScope(
+        { moduleId: "foaf", privateKey: requesterKeys.privateKey, directory: emptyDirectory },
+        { target: "trovi", scope: "test:scope", input: {}, grant },
+      ),
+    ).rejects.toMatchObject({ code: "module_not_found" });
+  });
+
   it("open call envelope has no grant field", () => {
     const timestamp = new Date().toISOString();
     const envelope = {

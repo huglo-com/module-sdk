@@ -9,8 +9,6 @@ import type { GrantCallbackOptions } from "./grant-callback.js";
 import {
   createModuleServer,
   DEFAULT_CALLBACK_PATH,
-  DEFAULT_GRANT_INIT_PATH,
-  grantInitPath,
   type ScopeHandler,
 } from "./server.js";
 import { callScope, type CallOptions } from "./client.js";
@@ -312,7 +310,7 @@ export class Module {
       this.app = null;
     }
 
-    const endpoint = this.init.endpoint?.replace(/\/$/, "");
+    const endpoint = this.init.endpoint?.replaceAll(/\/$/g, "");
     if (!endpoint) {
       throw new Error("MODULE_ENDPOINT or config.endpoint is required for createFile()");
     }
@@ -475,7 +473,7 @@ export class Module {
 
   /** Full callback URL for createInvite (endpoint + callbackPath). */
   getCallbackUrl(): string {
-    const endpoint = this.init.endpoint?.replace(/\/$/, "");
+    const endpoint = this.init.endpoint?.replaceAll(/\/$/g, "");
     if (!endpoint) {
       throw new Error("MODULE_ENDPOINT or config.endpoint is required for getCallbackUrl()");
     }
@@ -514,4 +512,4 @@ export class Module {
   }
 }
 
-export type { CallOptions };
+export type { CallOptions } from "./client.js";

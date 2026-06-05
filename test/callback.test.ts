@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { generateKeyPair } from "../src/keys.js";
 import { signObject } from "../src/signing.js";
-import { InMemoryDirectoryClient } from "../src/directory.js";
+import { HttpDirectoryClient, InMemoryDirectoryClient } from "../src/directory.js";
 import { InMemoryGrantStore } from "../src/store.js";
 import { Module, exchangeAndSaveGrants } from "../src/module.js";
 import {
@@ -98,6 +98,53 @@ describe("grant callback route", () => {
     expect(res.status).toBe(502);
     expect(await res.text()).toContain("Could not complete authorization");
     expect(grantStore.size()).toBe(0);
+  });
+
+  it("returns 502 when directory is unreachable during exchange", async () => {
+    const failingDirectory = new HttpDirectoryClient({
+      directoryUrl: "https://directory.example",
+      fetch: vi.fn().mockRejectedValue(new Error("network down")),
+    });
+    const onGrantCallbackError = vi.fn();
+    const module = createModule(true, {
+      directory: failingDirectory,
+      onGrantCallbackError,
+    });
+    const app = module.getApp();
+    const res = await app.request(`${DEFAULT_CALLBACK_PATH}?code=code-abc`);
+
+    expect(res.status).toBe(502);
+    expect(await res.text()).toContain("Could not complete authorization");
+    expect(grantStore.size()).toBe(0);
+    expect(onGrantCallbackError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "exchange",
+        code: "code-abc",
+        error: expect.objectContaining({ code: "directory_unreachable" }),
+      }),
+    );
+  });
+
+  it("onGrantCallbackError invoked when grant save fails with stage save", async () => {
+    const grants = [buildGrant()];
+    directory.setExchangeGrants("code-save-fail", grants);
+    const onGrantCallbackError = vi.fn();
+
+    const failingStore = {
+      save: vi.fn().mockRejectedValue(new Error("db down")),
+      find: grantStore.find.bind(grantStore),
+      list: grantStore.list.bind(grantStore),
+      delete: grantStore.delete.bind(grantStore),
+    };
+
+    const module = createModule(true, { onGrantCallbackError, grantStore: failingStore });
+    const app = module.getApp();
+    const res = await app.request(`${DEFAULT_CALLBACK_PATH}?code=code-save-fail`);
+
+    expect(res.status).toBe(502);
+    expect(onGrantCallbackError).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "save" }),
+    );
   });
 
   it("does not register callback route without grantStore or onGrantCallback", async () => {
@@ -442,6 +489,19 @@ describe("exchangeAndSaveGrants", () => {
         requester: "trovi",
       }),
     ).toEqual(grant);
+  });
+
+  it("propagates directory_unreachable without saving grants", async () => {
+    const directory = new HttpDirectoryClient({
+      directoryUrl: "https://directory.example",
+      fetch: vi.fn().mockRejectedValue(new Error("network down")),
+    });
+    const store = new InMemoryGrantStore();
+
+    await expect(exchangeAndSaveGrants(directory, store, "code-save")).rejects.toMatchObject({
+      code: "directory_unreachable",
+    });
+    expect(store.size()).toBe(0);
   });
 });
 

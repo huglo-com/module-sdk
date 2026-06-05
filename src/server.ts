@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
+import { routePath } from "hono/route";
 import { serveStatic } from "@hono/node-server/serve-static";
 import type { KeyObject } from "node:crypto";
 import { randomUUID } from "node:crypto";
@@ -44,7 +45,7 @@ export const DEFAULT_GRANT_INIT_PATH = "/grant/init";
 
 /** Derive grant init path from callback path (e.g. /grant/callback → /grant/init). */
 export function grantInitPath(callbackPath: string): string {
-  const normalized = callbackPath.replace(/\/$/, "");
+  const normalized = callbackPath.replaceAll(/\/$/g, "");
   if (normalized.endsWith("/callback")) {
     return `${normalized.slice(0, -"/callback".length)}/init`;
   }
@@ -284,7 +285,7 @@ function createMetricsMiddleware(metrics: ModuleMetrics): MiddlewareHandler {
     const start = performance.now();
     await next();
     const durationSeconds = (performance.now() - start) / 1000;
-    const route = c.req.routePath || c.req.path;
+    const route = routePath(c) || c.req.path;
     metrics.recordHttpRequest(c.req.method, route, String(c.res.status), durationSeconds);
   };
 }
@@ -393,7 +394,7 @@ function createGrantInitHandler(options: CreateServerOptions) {
       );
     }
 
-    const endpoint = options.endpoint?.replace(/\/$/, "");
+    const endpoint = options.endpoint?.replaceAll(/\/$/g, "");
     if (!endpoint) {
       return c.text("Module endpoint not configured", 503);
     }

@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { create, parse } from "content-disposition";
 import { z } from "zod";
 import type { FileStore } from "./file-store.js";
 
@@ -38,11 +39,11 @@ export type CreateFileOptions = CreateFileDataOptions | CreateFileUrlOptions;
 export type FetchFn = typeof globalThis.fetch;
 
 function normalizeExpiresAt(expires_at: Date | string): string {
-  const iso =
-    expires_at instanceof Date ? expires_at.toISOString() : new Date(expires_at).toISOString();
-  if (Number.isNaN(Date.parse(iso))) {
-    throw new Error("Invalid expires_at");
+  const date = expires_at instanceof Date ? expires_at : new Date(expires_at);
+  if (Number.isNaN(date.getTime())) {
+    throw new TypeError("Invalid expires_at");
   }
+  const iso = date.toISOString();
   if (Date.parse(iso) <= Date.now()) {
     throw new Error("expires_at must be in the future");
   }
@@ -70,22 +71,16 @@ function filenameFromContentDisposition(header: string | null): string | undefin
   if (!header) {
     return undefined;
   }
-  const match = /filename\*?=(?:UTF-8''|")?([^";\n]+)/i.exec(header);
-  if (!match?.[1]) {
-    return undefined;
-  }
   try {
-    return decodeURIComponent(match[1].replace(/"/g, "").trim());
+    return parse(header).parameters.filename;
   } catch {
-    return match[1].replace(/"/g, "").trim();
+    return undefined;
   }
 }
 
-function contentDispositionFilename(filename: string): string {
-  if (/^[\x20-\x7E]+$/.test(filename)) {
-    return filename.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  }
-  return "download";
+/** Build an inline Content-Disposition header value (RFC 6266 / RFC 8187). */
+function buildContentDisposition(filename: string): string {
+  return create(filename, { type: "inline" });
 }
 
 async function loadFromUrl(
@@ -170,7 +165,7 @@ export async function createFileRecord(
     expires_at,
   });
 
-  const base = endpoint.replace(/\/$/, "");
+  const base = endpoint.replaceAll(/\/$/g, "");
   return FileSchema.parse({
     url: `${base}/file/${token}`,
     content_type,
@@ -180,4 +175,4 @@ export async function createFileRecord(
   });
 }
 
-export { contentDispositionFilename };
+export { buildContentDisposition };

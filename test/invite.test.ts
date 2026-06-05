@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { generateKeyPair } from "../src/keys.js";
 import { signObject, verifyObject } from "../src/signing.js";
 import { HttpDirectoryClient, InMemoryDirectoryClient } from "../src/directory.js";
@@ -118,6 +118,29 @@ describe("invite flow", () => {
       scopes: [{ holder: "da", scope: "invoice:write" }],
     });
     // No throw means success; signing verified in previous test
+  });
+
+  it("createInvite propagates directory_unreachable when directory is down", async () => {
+    const failingDirectory = new HttpDirectoryClient({
+      directoryUrl: "https://account.huglo.com",
+      fetch: vi.fn().mockRejectedValue(new Error("network down")),
+    });
+    const module = new Module({
+      id: "trovi-test",
+      name: "Trovi",
+      description: "Test requester",
+      version: "1.0.0",
+      keyPair: requesterKeys,
+      huglo: { directoryUrl: "http://unused" },
+      directory: failingDirectory,
+    });
+
+    await expect(
+      module.createInvite({
+        callbackUrl: "https://trovi.example/oauth/callback",
+        scopes: [{ holder: "da", scope: "invoice:write" }],
+      }),
+    ).rejects.toMatchObject({ code: "directory_unreachable" });
   });
 
   it("exchangeGrants returns seeded grants", async () => {

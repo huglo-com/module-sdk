@@ -293,7 +293,7 @@ export function resolveOAuthOptions(
   const clientSecret = partial?.clientSecret ?? process.env["HUGLO_OAUTH_CLIENT_SECRET"];
   const redirectUri = partial?.redirectUri ?? process.env["HUGLO_OAUTH_REDIRECT_URI"];
   const issuer =
-    process.env["HUGLO_OAUTH_ISSUER"]?.replace(/\/$/, "") ?? DEFAULT_HUGLO_OAUTH_ISSUER;
+    process.env["HUGLO_OAUTH_ISSUER"]?.replaceAll(/\/$/g, "") ?? DEFAULT_HUGLO_OAUTH_ISSUER;
   const authorizeUrl =
     partial?.authorizeUrl ??
     process.env["HUGLO_OAUTH_AUTHORIZE_URL"] ??

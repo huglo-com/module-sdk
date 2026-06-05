@@ -51,7 +51,7 @@ export function buildGrantCallbackUrl(
   endpoint: string,
   callbackPath: string,
 ): string {
-  const base = endpoint.replace(/\/$/, "");
+  const base = endpoint.replaceAll(/\/$/g, "");
   const path = callbackPath.startsWith("/") ? callbackPath : `/${callbackPath}`;
   return `${base}${path}`;
 }

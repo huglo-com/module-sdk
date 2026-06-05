@@ -60,14 +60,17 @@ export function configPageHtml(options: ConfigPageOptions): string {
     ? ""
     : `<p class="login-prompt"><a href="${escapeAttr(options.configPath)}/login">Sign in with Huglo</a> to configure this module.</p>`;
 
+  const newConfigSelectedAttr = hasSelectedInstance ? "" : " selected";
+  const deleteButtonHiddenAttr = hasSelectedInstance ? "" : " hidden";
+
   const pickerSection = options.authenticated
     ? `<div class="field" id="config-picker">
     <label for="config-select">Configuration</label>
     <select id="config-select">
       ${instanceOptions}
-      <option value="__new__"${hasSelectedInstance ? "" : " selected"}>New configuration</option>
+      <option value="__new__"${newConfigSelectedAttr}>New configuration</option>
     </select>
-    <button type="button" id="delete-btn"${hasSelectedInstance ? "" : " hidden"}>Delete</button>
+    <button type="button" id="delete-btn"${deleteButtonHiddenAttr}>Delete</button>
   </div>`
     : "";
 
@@ -148,7 +151,7 @@ export function configPageHtml(options: ConfigPageOptions): string {
     }
 
     function truncateId(id) {
-      return id.length <= 8 ? id : id.slice(0, 8) + "\\u2026";
+      return id.length <= 8 ? id : id.slice(0, 8) + "…";
     }
 
     function formatLabel(values, id) {
@@ -442,7 +445,7 @@ function escapeAttr(text: string): string {
 /** Escape JSON for safe embedding in a script tag. */
 function escapeScriptJson(json: string): string {
   return json
-    .replaceAll("<", "\\u003c")
-    .replaceAll(">", "\\u003e")
-    .replaceAll("&", "\\u0026");
+    .replaceAll("<", String.raw`\u003c`)
+    .replaceAll(">", String.raw`\u003e`)
+    .replaceAll("&", String.raw`\u0026`);
 }

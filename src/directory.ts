@@ -77,7 +77,7 @@ export class HttpDirectoryClient implements DirectoryClient {
   private revocationLastFetch = 0;
 
   constructor(options: HttpDirectoryClientOptions) {
-    this.baseUrl = options.directoryUrl.replace(/\/$/, "");
+    this.baseUrl = options.directoryUrl.replaceAll(/\/$/g, "");
     this.ttlMs = options.ttlMs ?? 5 * 60 * 1000;
     this.revocationRefreshMs = options.revocationRefreshMs ?? 60 * 1000;
     this.fetchFn = options.fetch ?? globalThis.fetch;
@@ -96,7 +96,7 @@ export class HttpDirectoryClient implements DirectoryClient {
     const key = importPublicKeyBase64(entry.publicKey);
     this.setCached(this.moduleKeyCache, cacheKey, key);
     if (!keyId) {
-      this.setCached(this.endpointCache, moduleId, entry.endpoint.replace(/\/$/, ""));
+      this.setCached(this.endpointCache, moduleId, entry.endpoint.replaceAll(/\/$/g, ""));
     }
     return key;
   }
@@ -125,7 +125,7 @@ export class HttpDirectoryClient implements DirectoryClient {
 
     const url = `${this.baseUrl}/directory/modules/${encodeURIComponent(moduleId)}`;
     const entry = await this.fetchJson<ModuleDirectoryEntry>(url);
-    const endpoint = entry.endpoint.replace(/\/$/, "");
+    const endpoint = entry.endpoint.replaceAll(/\/$/g, "");
     this.setCached(this.endpointCache, moduleId, endpoint);
     this.setCached(
       this.moduleKeyCache,

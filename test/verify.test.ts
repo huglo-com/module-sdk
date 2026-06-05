@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { z } from "zod";
 import { generateKeyPair } from "../src/keys.js";
 import { signObject } from "../src/signing.js";
-import { InMemoryDirectoryClient } from "../src/directory.js";
+import { InMemoryDirectoryClient, HttpDirectoryClient } from "../src/directory.js";
 import { verifyInvokeRequest, verifyOpenInvokeRequest, NonceCache } from "../src/verify.js";
 import type { SignedGrant, InvokeRequest, OpenInvokeRequest } from "../src/envelope.js";
 import { sig1Payload, sig2Payload, sig2OpenPayload } from "../src/envelope.js";
@@ -253,6 +253,102 @@ describe("verify", () => {
       }),
     ).rejects.toMatchObject({ code: "invalid_payload" });
   });
+
+  describe("directory unavailability", () => {
+    it("rejects when requester key is not in directory", async () => {
+      directory.clear();
+      directory.registerModule(
+        "trovi",
+        "http://localhost:3000",
+        holderKeys.publicKey,
+        holderKeys.publicKeyBase64,
+      );
+      directory.registerUser("user-abc", authorKeys.publicKey);
+
+      const grant = buildGrant();
+      const req = buildRequest(grant, { amount: 1, vendor: "x" });
+
+      await expect(
+        verifyInvokeRequest(req, nonceCache, {
+          moduleId: "trovi",
+          urlScope: "invoices:write",
+          inputSchema,
+          directory,
+        }),
+      ).rejects.toMatchObject({ code: "module_not_found" });
+    });
+
+    it("rejects when author key is not in directory", async () => {
+      directory.registerUser("user-abc", authorKeys.publicKey);
+      directory.clear();
+      directory.registerModule(
+        "trovi",
+        "http://localhost:3000",
+        holderKeys.publicKey,
+        holderKeys.publicKeyBase64,
+      );
+      directory.registerModule(
+        "foaf",
+        "http://localhost:3001",
+        requesterKeys.publicKey,
+        requesterKeys.publicKeyBase64,
+      );
+
+      const grant = buildGrant();
+      const req = buildRequest(grant, { amount: 1, vendor: "x" });
+
+      await expect(
+        verifyInvokeRequest(req, nonceCache, {
+          moduleId: "trovi",
+          urlScope: "invoices:write",
+          inputSchema,
+          directory,
+        }),
+      ).rejects.toMatchObject({ code: "user_not_found" });
+    });
+
+    it("rejects when revocation list is unreachable", async () => {
+      const fetchFn = vi.fn().mockImplementation(async (url: string | URL | Request) => {
+        const path = String(url);
+        if (path.includes("/revocations")) {
+          throw new Error("network down");
+        }
+        if (path.includes("/modules/foaf")) {
+          return Response.json(
+            {
+              publicKey: requesterKeys.publicKeyBase64,
+              endpoint: "http://localhost:3001",
+            },
+            { status: 200 },
+          );
+        }
+        if (path.includes("/users/user-abc/key")) {
+          return Response.json(
+            { userId: "user-abc", publicKey: authorKeys.publicKeyBase64 },
+            { status: 200 },
+          );
+        }
+        return new Response(null, { status: 404 });
+      });
+
+      const httpDirectory = new HttpDirectoryClient({
+        directoryUrl: "https://directory.example",
+        fetch: fetchFn,
+      });
+
+      const grant = buildGrant();
+      const req = buildRequest(grant, { amount: 1, vendor: "x" });
+
+      await expect(
+        verifyInvokeRequest(req, nonceCache, {
+          moduleId: "trovi",
+          urlScope: "invoices:write",
+          inputSchema,
+          directory: httpDirectory,
+        }),
+      ).rejects.toMatchObject({ code: "directory_unreachable" });
+    });
+  });
 });
 
 describe("verifyOpenInvokeRequest", () => {
@@ -347,5 +443,25 @@ describe("verifyOpenInvokeRequest", () => {
         directory,
       }),
     ).rejects.toMatchObject({ code: "scope_mismatch" });
+  });
+
+  it("rejects when requester key is not in directory", async () => {
+    directory.clear();
+    directory.registerModule(
+      "trovi",
+      "http://localhost:3000",
+      holderKeys.publicKey,
+      holderKeys.publicKeyBase64,
+    );
+
+    const req = buildOpenRequest();
+    await expect(
+      verifyOpenInvokeRequest(req, nonceCache, {
+        moduleId: "trovi",
+        urlScope: "status:read",
+        inputSchema,
+        directory,
+      }),
+    ).rejects.toMatchObject({ code: "module_not_found" });
   });
 });
