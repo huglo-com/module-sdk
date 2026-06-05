@@ -185,6 +185,57 @@ describe("verify", () => {
     ).rejects.toMatchObject({ code: "grant_author_mismatch" });
   });
 
+  it("rejects grant when author and subject are not user identifiers", async () => {
+    directory.registerModule(
+      "trovi",
+      "http://localhost:3000",
+      authorKeys.publicKey,
+      authorKeys.publicKeyBase64,
+    );
+    const grantBody = {
+      grant_id: "g-module-subject",
+      holder: "trovi",
+      scope: "invoices:write",
+      subject: "trovi",
+      requester: "foaf",
+      author: "trovi",
+      constraints: {},
+      issued_at: new Date(Date.now() - 60_000).toISOString(),
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    };
+    const grant: SignedGrant = {
+      grant: grantBody,
+      signature: signObject(grantBody, authorKeys.privateKey),
+    };
+    const req = buildRequest(grant, { amount: 1, vendor: "x" });
+
+    await expect(
+      verifyInvokeRequest(req, nonceCache, {
+        moduleId: "trovi",
+        urlScope: "invoices:write",
+        inputSchema,
+        directory,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_grant_subject" });
+  });
+
+  it("rejects grant when subject lacks huglo:user prefix", async () => {
+    const grant = buildGrant({
+      subject: "user-abc",
+      author: "user-abc",
+    });
+    const req = buildRequest(grant, { amount: 1, vendor: "x" });
+
+    await expect(
+      verifyInvokeRequest(req, nonceCache, {
+        moduleId: "trovi",
+        urlScope: "invoices:write",
+        inputSchema,
+        directory,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_grant_subject" });
+  });
+
   it("rejects expired grant", async () => {
     const grant = buildGrant({
       expires_at: new Date(Date.now() - 1000).toISOString(),

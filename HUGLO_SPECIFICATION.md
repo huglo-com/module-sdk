@@ -284,9 +284,9 @@ A grant is a subject's signed authorization. The directory builds, signs, stores
 Read as: **author** authorizes **requester** to use **scope** at **holder**, concerning **subject**'s data.
 
 Field rules:
-- `subject` and `author` are `huglo:user:<id>`.
-- `author` must equal `subject` (self-authorization only; holders reject mismatches).
-- **Future:** delegated authorization may allow `author !== subject` when accompanied by a signed delegation proof from the subject. That is not part of the current protocol; holders enforce self-authorization today.
+- `subject` and `author` must be `huglo:user:<id>` (bare module ids or other identifier forms are rejected).
+- `author` must equal `subject` (user self-authorization only; holders reject mismatches with `grant_author_mismatch`).
+- **Future:** delegated authorization may allow `author !== subject` when accompanied by a signed delegation proof from the subject. That is not part of the current protocol; holders reject non-user identifiers and mismatched author/subject today.
 - `holder`, `requester` are bare module ids.
 - `constraints` is **reserved**; empty `{}` means no restriction. Holders reject any unrecognized constraint key (fail closed), so constraints should only be emitted once modules support them.
 - `issued_at` / `expires_at` are ISO 8601.
