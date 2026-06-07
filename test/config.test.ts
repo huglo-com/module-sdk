@@ -238,8 +238,8 @@ describe("config", () => {
 
     it("exchangeCode sends code_verifier in token request", async () => {
       let tokenBody = "";
-      const fetchFn = async (input: string | URL, init?: RequestInit) => {
-        const url = String(input);
+      const fetchFn = async (input: string | URL | Request, init?: RequestInit) => {
+        const url = input instanceof Request ? input.url : String(input);
         if (url.includes("/token")) {
           tokenBody = String(init?.body ?? "");
           return new Response(
@@ -711,6 +711,137 @@ describe("config", () => {
         { isNew: true, instanceId: created.instanceId },
         { isNew: false, instanceId: created.instanceId },
       ]);
+    });
+  });
+
+  describe("renderConfigPage hook", () => {
+    const keys = generateKeyPair();
+    const directory = new InMemoryDirectoryClient();
+    const configStore = new InMemoryConfigStore();
+    const oauthClient = new InMemoryHugloOAuthClient({
+      defaultSubject: "huglo:user:render-user",
+    });
+    const port = 9500 + Math.floor(Math.random() * 1000);
+
+    const customMod = new Module({
+      id: "render-module",
+      name: "Render Module",
+      description: "Custom config page",
+      version: "1.0.0",
+      keyPair: keys,
+      directory,
+      configStore,
+      oauthClient,
+      oauth: {
+        clientId: "test-client",
+        clientSecret: "test-secret",
+        redirectUri: `http://127.0.0.1:${port}/config/callback`,
+        authorizeUrl: "https://oauth.test/authorize",
+        tokenUrl: "https://oauth.test/token",
+        userInfoUrl: "https://oauth.test/userinfo",
+      },
+      renderConfigPage: (ctx) =>
+        `<html><body>custom:${ctx.subject ?? "anon"}</body></html>`,
+    });
+
+    customMod.config({
+      schema: ConfigSchema,
+      fields: {
+        target: "locked",
+        scope: "locked",
+        label: "userEntered",
+        hostRef: "hostProvided",
+      },
+      lockedValues: { target: "t", scope: "s" },
+    });
+
+    beforeAll(async () => {
+      directory.registerModule(
+        "render-module",
+        `http://127.0.0.1:${port}`,
+        keys.publicKey,
+        keys.publicKeyBase64,
+      );
+      await customMod.listen(port, "127.0.0.1");
+    });
+
+    afterAll(() => {
+      customMod.close();
+    });
+
+    it("serves custom HTML from renderConfigPage at GET /config", async () => {
+      const res = await customMod.getApp().request("/config");
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toBe("<html><body>custom:anon</body></html>");
+    });
+
+    it("passes authenticated subject to renderConfigPage", async () => {
+      const sessionCookie = createConfigSession(
+        "huglo:user:render-user",
+        "test-secret",
+      );
+      const res = await customMod.getApp().request("/config", {
+        headers: { Cookie: `${CONFIG_SESSION_COOKIE}=${sessionCookie}` },
+      });
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toBe("<html><body>custom:huglo:user:render-user</body></html>");
+    });
+  });
+
+  describe("renderConfigPage void fallback", () => {
+    const keys = generateKeyPair();
+    const directory = new InMemoryDirectoryClient();
+    const oauthClient = new InMemoryHugloOAuthClient({
+      defaultSubject: "huglo:user:fallback-user",
+    });
+    const port = 9600 + Math.floor(Math.random() * 1000);
+
+    const fallbackMod = new Module({
+      id: "fallback-module",
+      name: "Fallback Module",
+      description: "Falls back to default page",
+      version: "1.0.0",
+      keyPair: keys,
+      directory,
+      oauthClient,
+      oauth: {
+        clientId: "test-client",
+        clientSecret: "test-secret",
+        redirectUri: `http://127.0.0.1:${port}/config/callback`,
+        authorizeUrl: "https://oauth.test/authorize",
+        tokenUrl: "https://oauth.test/token",
+        userInfoUrl: "https://oauth.test/userinfo",
+      },
+      renderConfigPage: () => undefined,
+    });
+
+    fallbackMod.config({
+      schema: z.object({ label: z.string() }),
+      fields: { label: "userEntered" },
+    });
+
+    beforeAll(async () => {
+      directory.registerModule(
+        "fallback-module",
+        `http://127.0.0.1:${port}`,
+        keys.publicKey,
+        keys.publicKeyBase64,
+      );
+      await fallbackMod.listen(port, "127.0.0.1");
+    });
+
+    afterAll(() => {
+      fallbackMod.close();
+    });
+
+    it("uses default config page when hook returns void", async () => {
+      const res = await fallbackMod.getApp().request("/config");
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("Sign in with Huglo");
+      expect(html).toContain("notifyReady");
     });
   });
 });

@@ -25,8 +25,13 @@ export type {
   OAuthClientOptions,
   OnConfigSaved,
   OnConfigSavedContext,
+  RenderConfigPage,
+  RenderConfigPageContext,
+  RenderConfigPageResult,
   ConfigPageTheme,
+  ConfigInstanceEntry,
 } from "./module.js";
+export { configPageHtml } from "./module.js";
 export {
   InMemoryConfigStore,
   assembleConfigValues,

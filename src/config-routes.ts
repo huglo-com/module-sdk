@@ -8,7 +8,7 @@ import type { ConfigStore } from "./config-store.js";
 import type { ConfigManifestEntry } from "./manifest.js";
 import { buildConfigManifest } from "./manifest.js";
 import { configPageHtml } from "./config-page.js";
-import type { ConfigPageTheme } from "./config-page.js";
+import type { ConfigInstanceEntry, ConfigPageTheme } from "./config-page.js";
 import {
   CONFIG_SESSION_COOKIE,
   OAUTH_STATE_COOKIE,
@@ -38,15 +38,32 @@ export type OnConfigSaved = (
   ctx: OnConfigSavedContext,
 ) => void | Promise<void>;
 
+export interface RenderConfigPageContext {
+  c: Context;
+  manifest: ConfigManifestEntry;
+  configPath: string;
+  subject: string | null;
+  instanceId?: string;
+  existingValues?: Record<string, unknown>;
+  instances: ConfigInstanceEntry[];
+  labelField: string | null;
+  theme?: ConfigPageTheme;
+}
+
+export type RenderConfigPageResult = Response | string | void;
+
+export type RenderConfigPage = (
+  ctx: RenderConfigPageContext,
+) => RenderConfigPageResult | Promise<RenderConfigPageResult>;
+
 export interface ConfigRoutesOptions {
   configDefinition: ConfigDefinition;
   configStore: ConfigStore;
   oauth: HugloOAuthClient;
   oauthOptions: OAuthClientOptions;
   configPath?: string;
-  /** When set, the default page is not served; manifest exposes this URL instead. */
-  configPageUrl?: string;
   theme?: ConfigPageTheme;
+  renderConfigPage?: RenderConfigPage;
   onConfigSaved?: OnConfigSaved;
 }
 
@@ -54,9 +71,7 @@ export function mountConfigRoutes(app: Hono, options: ConfigRoutesOptions): void
   const configPath = normalizePath(options.configPath ?? DEFAULT_CONFIG_PATH);
   const manifest: ConfigManifestEntry = buildConfigManifest(options.configDefinition);
 
-  if (!options.configPageUrl) {
-    app.get(configPath, (c) => serveConfigPage(c, options, manifest, configPath));
-  }
+  app.get(configPath, (c) => serveConfigPage(c, options, manifest, configPath));
 
   app.get(`${configPath}/login`, (c) => {
     const existing = readConfigSession(
@@ -141,12 +156,12 @@ export function mountConfigRoutes(app: Hono, options: ConfigRoutesOptions): void
   );
 }
 
-async function serveConfigPage(
+async function buildRenderConfigPageContext(
   c: Context,
   options: ConfigRoutesOptions,
   manifest: ConfigManifestEntry,
   configPath: string,
-): Promise<Response> {
+): Promise<RenderConfigPageContext> {
   const subject = readConfigSession(
     getCookie(c, CONFIG_SESSION_COOKIE),
     options.oauthOptions.clientSecret,
@@ -161,11 +176,7 @@ async function serveConfigPage(
     }
   }
 
-  let instances: Array<{
-    instanceId: string;
-    label: string;
-    values: Record<string, unknown>;
-  }> = [];
+  let instances: ConfigInstanceEntry[] = [];
   if (subject) {
     const raw = await options.configStore.listBySubject(subject);
     instances = raw
@@ -179,18 +190,55 @@ async function serveConfigPage(
 
   const labelField = manifest.fields[0]?.name ?? null;
 
-  return c.html(
-    configPageHtml({
-      manifest,
-      configPath,
-      authenticated: !!subject,
-      instanceId: editId,
-      existingValues,
-      instances,
-      labelField,
-      theme: options.theme,
-    }),
-  );
+  return {
+    c,
+    manifest,
+    configPath,
+    subject,
+    instanceId: editId,
+    existingValues,
+    instances,
+    labelField,
+    theme: options.theme,
+  };
+}
+
+function defaultConfigPageHtml(ctx: RenderConfigPageContext): string {
+  return configPageHtml({
+    manifest: ctx.manifest,
+    configPath: ctx.configPath,
+    authenticated: ctx.subject !== null,
+    instanceId: ctx.instanceId,
+    existingValues: ctx.existingValues,
+    instances: ctx.instances,
+    labelField: ctx.labelField,
+    theme: ctx.theme,
+  });
+}
+
+function toConfigPageResponse(c: Context, result: Response | string): Response {
+  if (typeof result === "string") {
+    return c.html(result);
+  }
+  return result;
+}
+
+async function serveConfigPage(
+  c: Context,
+  options: ConfigRoutesOptions,
+  manifest: ConfigManifestEntry,
+  configPath: string,
+): Promise<Response> {
+  const ctx = await buildRenderConfigPageContext(c, options, manifest, configPath);
+
+  if (options.renderConfigPage) {
+    const result = await options.renderConfigPage(ctx);
+    if (result !== undefined) {
+      return toConfigPageResponse(c, result);
+    }
+  }
+
+  return c.html(defaultConfigPageHtml(ctx));
 }
 
 async function handleIntake(

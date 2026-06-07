@@ -27,7 +27,7 @@ import {
   type HugloOAuthClient,
   type OAuthClientOptions,
 } from "./oauth.js";
-import type { OnConfigSaved } from "./config-routes.js";
+import type { OnConfigSaved, RenderConfigPage } from "./config-routes.js";
 import { DEFAULT_CONFIG_PATH } from "./config-routes.js";
 import type { ConfigPageTheme } from "./config-page.js";
 import type { FileStore } from "./file-store.js";
@@ -76,9 +76,10 @@ export {
   readPkceCookie,
 } from "./oauth.js";
 export type { OAuthPkceParams } from "./oauth.js";
-export type { OnConfigSaved, OnConfigSavedContext } from "./config-routes.js";
+export type { OnConfigSaved, OnConfigSavedContext, RenderConfigPage, RenderConfigPageContext, RenderConfigPageResult } from "./config-routes.js";
 export { DEFAULT_CONFIG_PATH } from "./config-routes.js";
-export type { ConfigPageTheme } from "./config-page.js";
+export type { ConfigPageTheme, ConfigInstanceEntry } from "./config-page.js";
+export { configPageHtml } from "./config-page.js";
 export type { FileStore, StoredFile } from "./file-store.js";
 export { InMemoryFileStore } from "./file-store.js";
 export {
@@ -135,10 +136,10 @@ export interface ModuleConfig extends GrantCallbackOptions {
   configStore?: ConfigStore;
   /** Config UI path (default: /config). */
   configPath?: string;
-  /** Override default SDK config page URL (published in manifest). */
-  configPageUrl?: string;
   /** Light theming for the default config page. */
   theme?: ConfigPageTheme;
+  /** Custom config page renderer at GET {configPath}. Omit for built-in page; return void to fall back. */
+  renderConfigPage?: RenderConfigPage;
   /** Hook after config intake saves an instance (provisioning, grant invites, etc.). */
   onConfigSaved?: OnConfigSaved;
   /** Ephemeral file persistence (defaults to in-memory when using createFile()). */
@@ -398,8 +399,8 @@ export class Module {
       oauth: configRuntime?.oauth,
       oauthOptions: configRuntime?.oauthOptions,
       configPath: this.init.configPath ?? DEFAULT_CONFIG_PATH,
-      configPageUrl: this.init.configPageUrl,
       configTheme: this.init.theme,
+      renderConfigPage: this.init.renderConfigPage,
       onConfigSaved: this.init.onConfigSaved,
       fileStore: this.getFileStoreForServer(),
       metrics: this.moduleMetrics,
