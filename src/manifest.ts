@@ -34,7 +34,7 @@ export interface ModuleManifest {
   publicKey: string;
   scopes: ScopeManifestEntry[];
   emitters: EmitterManifestEntry[];
-  config?: ConfigManifestEntry;
+  config?: boolean;
 }
 
 export interface ScopeDefinition {
@@ -70,7 +70,7 @@ export function buildManifest(
     description: string;
     version: string;
     publicKey: string;
-    configDefinition?: ConfigDefinition;
+    hasConfig?: boolean;
   },
   scopes: Map<string, ScopeDefinition>,
   emitters: Map<string, EmitterDefinition> = new Map(),
@@ -106,8 +106,8 @@ export function buildManifest(
     emitters: emitterEntries,
   };
 
-  if (config.configDefinition) {
-    manifest.config = buildConfigManifest(config.configDefinition);
+  if (config.hasConfig) {
+    manifest.config = true;
   }
 
   return manifest;

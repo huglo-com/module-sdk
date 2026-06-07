@@ -134,11 +134,9 @@ export interface ModuleConfig extends GrantCallbackOptions {
   oauthClient?: HugloOAuthClient;
   /** Per-instance config persistence (required when using config()). */
   configStore?: ConfigStore;
-  /** Config UI path (default: /config). */
-  configPath?: string;
   /** Light theming for the default config page. */
   theme?: ConfigPageTheme;
-  /** Custom config page renderer at GET {configPath}. Omit for built-in page; return void to fall back. */
+  /** Custom config page renderer at GET /config. Omit for built-in page; return void to fall back. */
   renderConfigPage?: RenderConfigPage;
   /** Hook after config intake saves an instance (provisioning, grant invites, etc.). */
   onConfigSaved?: OnConfigSaved;
@@ -213,6 +211,7 @@ export class Module {
   private readonly scopes = new Map<string, RegisteredScope<z.ZodType, z.ZodType>>();
   private readonly emitters = new Map<string, EmitterDefinition>();
   private configDefinition: ConfigDefinition | undefined;
+  private customConfigHandler: Hono | undefined;
   private defaultConfigStore: ConfigStore | undefined;
   private defaultFileStore: InMemoryFileStore | undefined;
   private readonly moduleMetrics: ModuleMetrics | undefined;
@@ -280,7 +279,23 @@ export class Module {
    * Enables config routes, Huglo OAuth login, and /manifest config output.
    */
   config(options: ConfigDefinition): this {
+    if (this.customConfigHandler) {
+      throw new Error("config() cannot be combined with customConfig()");
+    }
     this.configDefinition = options;
+    this.app = null;
+    return this;
+  }
+
+  /**
+   * Full custom config: developer owns all routes under /config (auth, save, postMessage).
+   * Mutually exclusive with config(). No schema or OAuth required.
+   */
+  customConfig(handler: Hono): this {
+    if (this.configDefinition) {
+      throw new Error("customConfig() cannot be combined with config()");
+    }
+    this.customConfigHandler = handler;
     this.app = null;
     return this;
   }
@@ -398,7 +413,8 @@ export class Module {
       configStore: configRuntime?.configStore,
       oauth: configRuntime?.oauth,
       oauthOptions: configRuntime?.oauthOptions,
-      configPath: this.init.configPath ?? DEFAULT_CONFIG_PATH,
+      hasConfig: !!(this.configDefinition || this.customConfigHandler),
+      customConfigHandler: this.customConfigHandler,
       configTheme: this.init.theme,
       renderConfigPage: this.init.renderConfigPage,
       onConfigSaved: this.init.onConfigSaved,

@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { z } from "zod";
+import { Hono } from "hono";
+import { getCookie, setCookie } from "hono/cookie";
 import { generateKeyPair } from "../src/keys.js";
 import { InMemoryDirectoryClient } from "../src/directory.js";
 import { Module } from "../src/module.js";
@@ -24,7 +26,72 @@ import {
   OAUTH_PKCE_COOKIE,
   OAUTH_STATE_COOKIE,
 } from "../src/oauth.js";
+import {
+  CONFIG_READY_MESSAGE,
+  CONFIG_SAVED_MESSAGE,
+} from "../src/config-opener.js";
 import type { ModuleManifest } from "../src/manifest.js";
+
+const DEV_SESSION_COOKIE = "dev_session";
+
+function createFullCustomConfigHandler() {
+  const store = new Map<string, { apiKey: string }>();
+  const handler = new Hono();
+
+  handler.get("/", (c) => {
+    const instanceId = c.req.query("instanceId") ?? "";
+    const existing = instanceId ? store.get(instanceId) : undefined;
+    return c.html(`<!DOCTYPE html>
+<html><body>
+<div id="instance-id">${instanceId}</div>
+<div id="api-key">${existing?.apiKey ?? ""}</div>
+<script>
+  const CONFIG_READY = ${JSON.stringify(CONFIG_READY_MESSAGE)};
+  const CONFIG_SAVED = ${JSON.stringify(CONFIG_SAVED_MESSAGE)};
+  function notifyReady() {
+    const msg = { type: CONFIG_READY };
+    if (window.opener) window.opener.postMessage(msg, "*");
+  }
+  notifyReady();
+</script>
+</body></html>`);
+  });
+
+  handler.post("/login", async (c) => {
+    const body = (await c.req.json()) as { apiKey?: string };
+    if (body.apiKey !== "secret-key") {
+      return c.json({ error: "Invalid credentials" }, 401);
+    }
+    setCookie(c, DEV_SESSION_COOKIE, "authenticated", {
+      httpOnly: true,
+      path: "/",
+      maxAge: 86400,
+    });
+    return c.json({ ok: true });
+  });
+
+  handler.get("/me", (c) => {
+    if (getCookie(c, DEV_SESSION_COOKIE) !== "authenticated") {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    return c.json({ ok: true });
+  });
+
+  handler.post("/save", async (c) => {
+    if (getCookie(c, DEV_SESSION_COOKIE) !== "authenticated") {
+      return c.json({ error: "Authentication required" }, 401);
+    }
+    const body = (await c.req.json()) as { instanceId?: string; apiKey: string };
+    if (body.instanceId && !store.has(body.instanceId)) {
+      return c.json({ error: "Instance not found" }, 404);
+    }
+    const instanceId = body.instanceId ?? crypto.randomUUID();
+    store.set(instanceId, { apiKey: body.apiKey });
+    return c.json({ instanceId });
+  });
+
+  return { handler, store };
+}
 
 const ConfigSchema = z.object({
   target: z.string().default("module-fixed-target"),
@@ -321,14 +388,7 @@ describe("config", () => {
     it("lists config in /manifest", async () => {
       const res = await mod.getApp().request("/manifest");
       const manifest = (await res.json()) as ModuleManifest;
-      expect(manifest.config).toBeDefined();
-      expect(manifest.config!.fields).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ name: "target", source: "locked" }),
-          expect.objectContaining({ name: "label", source: "userEntered" }),
-          expect.objectContaining({ name: "hostRef", source: "hostProvided" }),
-        ]),
-      );
+      expect(manifest.config).toBe(true);
     });
 
     it("config page notifies opener on ready and save", async () => {
@@ -842,6 +902,243 @@ describe("config", () => {
       const html = await res.text();
       expect(html).toContain("Sign in with Huglo");
       expect(html).toContain("notifyReady");
+    });
+  });
+
+  describe("full custom config (customConfig)", () => {
+    const keys = generateKeyPair();
+    const directory = new InMemoryDirectoryClient();
+    const port = 9700 + Math.floor(Math.random() * 1000);
+    const { handler: customHandler, store } = createFullCustomConfigHandler();
+
+    const fullCustomMod = new Module({
+      id: "full-custom-module",
+      name: "Full Custom Module",
+      description: "Developer-owned config",
+      version: "1.0.0",
+      keyPair: keys,
+      directory,
+    });
+
+    fullCustomMod.customConfig(customHandler);
+
+    beforeAll(async () => {
+      directory.registerModule(
+        "full-custom-module",
+        `http://127.0.0.1:${port}`,
+        keys.publicKey,
+        keys.publicKeyBase64,
+      );
+      await fullCustomMod.listen(port, "127.0.0.1");
+    });
+
+    afterAll(() => {
+      fullCustomMod.close();
+    });
+
+    it("getApp() does not require OAuth", () => {
+      expect(() => fullCustomMod.getApp()).not.toThrow();
+    });
+
+    it("manifest.config is true with no fields property", async () => {
+      const res = await fullCustomMod.getApp().request("/manifest");
+      const manifest = (await res.json()) as ModuleManifest;
+      expect(manifest.config).toBe(true);
+      expect(manifest).not.toHaveProperty("fields");
+      expect(Object.keys(manifest)).not.toContain("fields");
+    });
+
+    it("GET /config is served by developer handler, not SDK default page", async () => {
+      const res = await fullCustomMod.getApp().request("/config");
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).not.toContain("Sign in with Huglo");
+      expect(html).toContain(CONFIG_READY_MESSAGE);
+      expect(html).toContain(CONFIG_SAVED_MESSAGE);
+    });
+
+    it("GET /config?instanceId= echoes instance id and prefills stored values", async () => {
+      store.set("inst-edit", { apiKey: "stored-key" });
+      const res = await fullCustomMod.getApp().request("/config?instanceId=inst-edit");
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain('id="instance-id">inst-edit');
+      expect(html).toContain('id="api-key">stored-key');
+    });
+
+    it("developer login sets session cookie and /me succeeds", async () => {
+      const loginRes = await fullCustomMod.getApp().request("/config/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: "secret-key" }),
+      });
+      expect(loginRes.status).toBe(200);
+      const setCookie = loginRes.headers.get("Set-Cookie") ?? "";
+      expect(setCookie).toContain(DEV_SESSION_COOKIE);
+
+      const meRes = await fullCustomMod.getApp().request("/config/me", {
+        headers: { Cookie: setCookie.split(";")[0]! },
+      });
+      expect(meRes.status).toBe(200);
+    });
+
+    it("POST /config/save mints instanceId on create", async () => {
+      store.clear();
+      const loginRes = await fullCustomMod.getApp().request("/config/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: "secret-key" }),
+      });
+      const cookie = loginRes.headers.get("Set-Cookie")?.split(";")[0] ?? "";
+
+      const saveRes = await fullCustomMod.getApp().request("/config/save", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: cookie,
+        },
+        body: JSON.stringify({ apiKey: "my-api-key" }),
+      });
+      expect(saveRes.status).toBe(200);
+      const body = (await saveRes.json()) as { instanceId: string };
+      expect(body.instanceId).toBeTruthy();
+      expect(store.get(body.instanceId)?.apiKey).toBe("my-api-key");
+    });
+
+    it("POST /config/save updates existing instance", async () => {
+      store.clear();
+      store.set("inst-update", { apiKey: "old-key" });
+      const loginRes = await fullCustomMod.getApp().request("/config/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: "secret-key" }),
+      });
+      const cookie = loginRes.headers.get("Set-Cookie")?.split(";")[0] ?? "";
+
+      const saveRes = await fullCustomMod.getApp().request("/config/save", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: cookie,
+        },
+        body: JSON.stringify({ instanceId: "inst-update", apiKey: "new-key" }),
+      });
+      expect(saveRes.status).toBe(200);
+      const body = (await saveRes.json()) as { instanceId: string };
+      expect(body.instanceId).toBe("inst-update");
+      expect(store.get("inst-update")?.apiKey).toBe("new-key");
+    });
+
+    it("POST /config/save returns 404 for unknown instance", async () => {
+      const loginRes = await fullCustomMod.getApp().request("/config/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: "secret-key" }),
+      });
+      const cookie = loginRes.headers.get("Set-Cookie")?.split(";")[0] ?? "";
+
+      const saveRes = await fullCustomMod.getApp().request("/config/save", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: cookie,
+        },
+        body: JSON.stringify({ instanceId: "missing", apiKey: "x" }),
+      });
+      expect(saveRes.status).toBe(404);
+    });
+
+    it("GET /config/me without session returns 401", async () => {
+      const res = await fullCustomMod.getApp().request("/config/me");
+      expect(res.status).toBe(401);
+    });
+
+    it("SDK managed routes are not mounted", async () => {
+      const intakeRes = await fullCustomMod.getApp().request("/config/intake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userValues: {}, hostValues: {} }),
+      });
+      expect(intakeRes.status).toBe(404);
+
+      const callbackRes = await fullCustomMod.getApp().request(
+        "/config/callback?code=x&state=y",
+      );
+      expect(callbackRes.status).toBe(404);
+      expect(callbackRes.headers.get("Set-Cookie") ?? "").not.toContain(
+        OAUTH_STATE_COOKIE,
+      );
+    });
+
+    it("lifecycle: login, create, reopen with instanceId, update", async () => {
+      store.clear();
+      const loginRes = await fullCustomMod.getApp().request("/config/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: "secret-key" }),
+      });
+      const cookie = loginRes.headers.get("Set-Cookie")?.split(";")[0] ?? "";
+
+      const createRes = await fullCustomMod.getApp().request("/config/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: cookie },
+        body: JSON.stringify({ apiKey: "lifecycle-key" }),
+      });
+      const created = (await createRes.json()) as { instanceId: string };
+
+      const reopenRes = await fullCustomMod.getApp().request(
+        `/config?instanceId=${created.instanceId}`,
+      );
+      expect(await reopenRes.text()).toContain("lifecycle-key");
+
+      const updateRes = await fullCustomMod.getApp().request("/config/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: cookie },
+        body: JSON.stringify({
+          instanceId: created.instanceId,
+          apiKey: "lifecycle-updated",
+        }),
+      });
+      expect(updateRes.status).toBe(200);
+      expect(store.get(created.instanceId)?.apiKey).toBe("lifecycle-updated");
+    });
+  });
+
+  describe("customConfig mutual exclusion", () => {
+    const keys = generateKeyPair();
+
+    it("config() then customConfig() throws", () => {
+      const mod = new Module({
+        id: "excl-1",
+        name: "Excl",
+        description: "d",
+        version: "1.0.0",
+        keyPair: keys,
+      });
+      mod.config({
+        schema: z.object({ label: z.string() }),
+        fields: { label: "userEntered" },
+      });
+      expect(() => mod.customConfig(new Hono())).toThrow(
+        /cannot be combined with config\(\)/,
+      );
+    });
+
+    it("customConfig() then config() throws", () => {
+      const mod = new Module({
+        id: "excl-2",
+        name: "Excl",
+        description: "d",
+        version: "1.0.0",
+        keyPair: keys,
+      });
+      mod.customConfig(new Hono());
+      expect(() =>
+        mod.config({
+          schema: z.object({ label: z.string() }),
+          fields: { label: "userEntered" },
+        }),
+      ).toThrow(/cannot be combined with customConfig\(\)/);
     });
   });
 });

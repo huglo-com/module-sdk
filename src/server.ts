@@ -32,7 +32,7 @@ import {
 } from "./grant-callback.js";
 import type { ConfigDefinition } from "./config.js";
 import type { ConfigStore } from "./config-store.js";
-import { mountConfigRoutes, type OnConfigSaved, type RenderConfigPage } from "./config-routes.js";
+import { mountConfigRoutes, DEFAULT_CONFIG_PATH, type OnConfigSaved, type RenderConfigPage } from "./config-routes.js";
 import type { ConfigPageTheme } from "./config-page.js";
 import type { HugloOAuthClient, OAuthClientOptions } from "./oauth.js";
 import type { FileStore } from "./file-store.js";
@@ -75,7 +75,8 @@ export interface ServerConfig {
   configStore?: ConfigStore;
   oauth?: HugloOAuthClient;
   oauthOptions?: OAuthClientOptions;
-  configPath?: string;
+  hasConfig?: boolean;
+  customConfigHandler?: Hono;
   configTheme?: ConfigPageTheme;
   renderConfigPage?: RenderConfigPage;
   onConfigSaved?: OnConfigSaved;
@@ -111,7 +112,7 @@ export function createModuleServer(options: CreateServerOptions): Hono {
         description: options.description,
         version: options.version,
         publicKey: options.publicKeyBase64,
-        configDefinition: options.configDefinition,
+        hasConfig: options.hasConfig,
       },
       options.scopes,
       options.emitters ?? new Map(),
@@ -168,7 +169,9 @@ export function createModuleServer(options: CreateServerOptions): Hono {
     });
   }
 
-  if (
+  if (options.customConfigHandler) {
+    app.route(DEFAULT_CONFIG_PATH, options.customConfigHandler);
+  } else if (
     options.configDefinition &&
     options.configStore &&
     options.oauth &&
@@ -179,7 +182,6 @@ export function createModuleServer(options: CreateServerOptions): Hono {
       configStore: options.configStore,
       oauth: options.oauth,
       oauthOptions: options.oauthOptions,
-      configPath: options.configPath,
       theme: options.configTheme,
       renderConfigPage: options.renderConfigPage,
       onConfigSaved: options.onConfigSaved,

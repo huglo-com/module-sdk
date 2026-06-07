@@ -61,14 +61,13 @@ export interface ConfigRoutesOptions {
   configStore: ConfigStore;
   oauth: HugloOAuthClient;
   oauthOptions: OAuthClientOptions;
-  configPath?: string;
   theme?: ConfigPageTheme;
   renderConfigPage?: RenderConfigPage;
   onConfigSaved?: OnConfigSaved;
 }
 
 export function mountConfigRoutes(app: Hono, options: ConfigRoutesOptions): void {
-  const configPath = normalizePath(options.configPath ?? DEFAULT_CONFIG_PATH);
+  const configPath = DEFAULT_CONFIG_PATH;
   const manifest: ConfigManifestEntry = buildConfigManifest(options.configDefinition);
 
   app.get(configPath, (c) => serveConfigPage(c, options, manifest, configPath));
@@ -337,10 +336,6 @@ async function handleDeleteInstance(
 
   await options.configStore.delete(instanceId);
   return c.json({ ok: true });
-}
-
-function normalizePath(path: string): string {
-  return path.startsWith("/") ? path : `/${path}`;
 }
 
 function clearOAuthCookies(c: Context): void {
