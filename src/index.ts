@@ -102,6 +102,9 @@ export type {
   OpenConfigPopupOptions,
   ConfigPopupWindow,
 } from "./config-opener.js";
+export {
+  verifyConfigProof,
+} from "./config-proof.js";
 
 
 // The following functions are exported only for testing purposes, they should not be used in the production code

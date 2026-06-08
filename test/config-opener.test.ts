@@ -9,6 +9,8 @@ import {
   DEFAULT_CONFIG_POPUP_FEATURES,
 } from "../src/config-opener.js";
 
+const dummyProof = { assertion: { subject: "huglo:user:u" }, signature: "ed25519:x" };
+
 describe("config-opener", () => {
   describe("buildConfigUrl", () => {
     it("returns base URL when no instanceId", () => {
@@ -109,8 +111,7 @@ describe("config-opener", () => {
         openConfigPopup(
           {
             configUrl: "https://mod.example/config",
-            flowId: "flow-1",
-            nodeId: "node-1",
+            configProof: dummyProof,
             onSaved: () => {},
           },
           browser,
@@ -118,17 +119,17 @@ describe("config-opener", () => {
       ).toBeNull();
     });
 
-    it("posts host values on ready and calls onSaved", () => {
+    it("posts configProof on ready and calls onSaved", () => {
       const postMessage = vi.fn();
       const popup = { closed: false, postMessage };
       const browser = mockBrowser(popup);
+      const proof = { assertion: { subject: "huglo:user:u" }, signature: "ed25519:x" };
 
       const onSaved = vi.fn();
       const result = openConfigPopup(
         {
           configUrl: "https://mod.example/config",
-          flowId: "flow-1",
-          nodeId: "node-1",
+          configProof: proof,
           onSaved,
         },
         browser,
@@ -142,7 +143,7 @@ describe("config-opener", () => {
         data: { type: CONFIG_READY_MESSAGE },
       });
       expect(postMessage).toHaveBeenCalledWith(
-        { flowId: "flow-1", nodeId: "node-1" },
+        { configProof: proof },
         "https://mod.example",
       );
 
@@ -155,6 +156,34 @@ describe("config-opener", () => {
       expect(browser.removeEventListener).toHaveBeenCalled();
     });
 
+    it("forwards hostValues in postMessage payload", () => {
+      const postMessage = vi.fn();
+      const popup = { closed: false, postMessage };
+      const browser = mockBrowser(popup);
+      const proof = { assertion: { subject: "huglo:user:u" }, signature: "ed25519:x" };
+
+      openConfigPopup(
+        {
+          configUrl: "https://mod.example/config",
+          configProof: proof,
+          hostValues: { hostRef: "opaque-host-value" },
+          onSaved: () => {},
+        },
+        browser,
+      );
+
+      browser.listeners[0]!({
+        source: popup,
+        origin: "https://mod.example",
+        data: { type: CONFIG_READY_MESSAGE },
+      });
+
+      expect(postMessage).toHaveBeenCalledWith(
+        { configProof: proof, hostRef: "opaque-host-value" },
+        "https://mod.example",
+      );
+    });
+
     it("ignores messages from wrong origin or source", () => {
       const postMessage = vi.fn();
       const popup = { closed: false, postMessage };
@@ -164,8 +193,7 @@ describe("config-opener", () => {
       openConfigPopup(
         {
           configUrl: "https://mod.example/config",
-          flowId: "f",
-          nodeId: "n",
+          configProof: dummyProof,
           onSaved,
         },
         browser,
@@ -193,8 +221,7 @@ describe("config-opener", () => {
       openConfigPopup(
         {
           configUrl: "https://mod.example/config",
-          flowId: "flow-1",
-          nodeId: "node-1",
+          configProof: dummyProof,
           configInstanceId: "inst-edit",
           onSaved: () => {},
         },
@@ -216,8 +243,7 @@ describe("config-opener", () => {
       openConfigPopup(
         {
           configUrl: "https://mod.example/config",
-          flowId: "flow-1",
-          nodeId: "node-1",
+          configProof: dummyProof,
           onSaved: () => {},
           popupFeatures: features,
         },
@@ -239,8 +265,7 @@ describe("config-opener", () => {
       openConfigPopup(
         {
           configUrl: "https://mod.example/config",
-          flowId: "flow-1",
-          nodeId: "node-1",
+          configProof: dummyProof,
           onSaved,
         },
         browser,

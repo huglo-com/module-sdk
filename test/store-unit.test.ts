@@ -13,6 +13,7 @@ describe("store unit", () => {
       await store.set({
         instanceId: "inst-1",
         subject: "huglo:user:a",
+        directorySubject: "huglo:user:a",
         values: { label: "A" },
       });
       expect(store.size()).toBe(1);
@@ -27,6 +28,7 @@ describe("store unit", () => {
       await store.set({
         instanceId: "inst-1",
         subject: "huglo:user:a",
+        directorySubject: "huglo:user:a",
         values: {},
       });
       store.clear();

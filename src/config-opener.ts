@@ -40,9 +40,11 @@ const POPUP_CLOSED_POLL_MS = 800;
 
 export interface OpenConfigPopupOptions {
   configUrl: string;
-  flowId: string;
-  nodeId: string;
+  /** Directory-signed config identity proof from the host. */
+  configProof: unknown;
   configInstanceId?: string;
+  /** Optional values for schema fields with source hostProvided. */
+  hostValues?: Record<string, unknown>;
   onSaved: (instanceId: string) => void;
   /** Optional; default 480×720 centered. */
   popupFeatures?: string;
@@ -100,7 +102,10 @@ export function openConfigPopup(
 ): ConfigPopupWindow | null {
   const url = buildConfigUrl(options.configUrl, options.configInstanceId);
   const configOrigin = new URL(options.configUrl).origin;
-  const hostPayload = { flowId: options.flowId, nodeId: options.nodeId };
+  const hostPayload: Record<string, unknown> = {
+    configProof: options.configProof,
+    ...options.hostValues,
+  };
   const g = browser;
 
   const popup = g.open(

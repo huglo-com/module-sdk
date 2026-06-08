@@ -1,7 +1,9 @@
 export interface InstanceConfig {
   instanceId: string;
-  /** WHOSE config — a value, not a lookup key. */
+  /** Module-account owner (session A) — used for listing and config UI ownership. */
   subject: string;
+  /** Directory-verified Huglo subject (config proof session B) — used for invoke enforcement. */
+  directorySubject: string;
   values: Record<string, unknown>;
 }
 

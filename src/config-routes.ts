@@ -5,6 +5,10 @@ import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { ConfigDefinition } from "./config.js";
 import { assembleConfigValues, ConfigAssemblyError, formatInstanceLabel } from "./config.js";
 import type { ConfigStore } from "./config-store.js";
+import type { DirectoryClient } from "./directory.js";
+import { verifyConfigProof } from "./config-proof.js";
+import { ModuleError } from "./errors.js";
+import type { NonceCache } from "./verify.js";
 import type { ConfigManifestEntry } from "./manifest.js";
 import { buildConfigManifest } from "./manifest.js";
 import { configPageHtml } from "./config-page.js";
@@ -29,7 +33,10 @@ export const DEFAULT_CONFIG_PATH = "/config";
 export interface OnConfigSavedContext {
   c: Context;
   instanceId: string;
+  /** Session A — module OAuth login; UI tenancy (list/edit/delete). Not federation identity. */
   subject: string;
+  /** Session B — verified configProof subject; use for host sync, grants, audit, invoke binding. */
+  directorySubject: string;
   values: Record<string, unknown>;
   isNew: boolean;
 }
@@ -57,6 +64,8 @@ export type RenderConfigPage = (
 ) => RenderConfigPageResult | Promise<RenderConfigPageResult>;
 
 export interface ConfigRoutesOptions {
+  moduleId: string;
+  directory: DirectoryClient;
   configDefinition: ConfigDefinition;
   configStore: ConfigStore;
   oauth: HugloOAuthClient;
@@ -64,6 +73,7 @@ export interface ConfigRoutesOptions {
   theme?: ConfigPageTheme;
   renderConfigPage?: RenderConfigPage;
   onConfigSaved?: OnConfigSaved;
+  configProofNonceCache: NonceCache;
 }
 
 export function mountConfigRoutes(app: Hono, options: ConfigRoutesOptions): void {
@@ -240,6 +250,65 @@ async function serveConfigPage(
   return c.html(defaultConfigPageHtml(ctx));
 }
 
+type IntakeBody = {
+  userValues?: Record<string, unknown>;
+  hostValues?: Record<string, unknown>;
+  instanceId?: string;
+  configProof?: unknown;
+};
+
+async function parseIntakeBody(c: Context): Promise<IntakeBody | Response> {
+  try {
+    return await c.req.json<IntakeBody>();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+}
+
+function proofVerificationErrorResponse(c: Context, err: unknown): Response {
+  if (err instanceof ModuleError) {
+    const status = err.code.startsWith("config_proof_") ? 403 : 400;
+    return c.json({ error: err.message, code: err.code }, status);
+  }
+  return c.json({ error: "Invalid config proof" }, 403);
+}
+
+function assemblyErrorResponse(c: Context, err: unknown): Response {
+  if (err instanceof ConfigAssemblyError) {
+    return c.json({ error: err.message }, 400);
+  }
+  return c.json({ error: "Validation failed" }, 400);
+}
+
+function assembleIntakeValues(
+  options: ConfigRoutesOptions,
+  userValues: Record<string, unknown>,
+  hostValues: Record<string, unknown>,
+): Record<string, unknown> {
+  const assembled = assembleConfigValues({
+    definition: options.configDefinition,
+    userValues,
+    hostValues,
+  });
+  return assembled.values;
+}
+
+async function validateIntakeEditAccess(
+  c: Context,
+  configStore: ConfigStore,
+  instanceId: string,
+  subject: string,
+): Promise<Response | null> {
+  const existing = await configStore.get(instanceId);
+  if (!existing) {
+    return c.json({ error: "Instance not found" }, 404);
+  }
+  if (existing.subject !== subject) {
+    return c.json({ error: "Forbidden" }, 403);
+  }
+  return null;
+}
+
 async function handleIntake(
   c: Context,
   options: ConfigRoutesOptions,
@@ -252,55 +321,60 @@ async function handleIntake(
     return c.json({ error: "Authentication required" }, 401);
   }
 
-  let body: {
-    userValues?: Record<string, unknown>;
-    hostValues?: Record<string, unknown>;
-    instanceId?: string;
-  };
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: "Invalid JSON body" }, 400);
+  const body = await parseIntakeBody(c);
+  if (body instanceof Response) {
+    return body;
   }
 
-  const userValues = body.userValues ?? {};
-  const hostValues = body.hostValues ?? {};
+  if (body.configProof === undefined) {
+    return c.json({ error: "Config proof required" }, 400);
+  }
+
+  let directorySubject: string;
+  try {
+    directorySubject = await verifyConfigProof(body.configProof, {
+      moduleId: options.moduleId,
+      directory: options.directory,
+      nonceCache: options.configProofNonceCache,
+    });
+  } catch (err) {
+    return proofVerificationErrorResponse(c, err);
+  }
 
   let values: Record<string, unknown>;
   try {
-    const assembled = assembleConfigValues({
-      definition: options.configDefinition,
-      userValues,
-      hostValues,
-    });
-    values = assembled.values;
+    values = assembleIntakeValues(
+      options,
+      body.userValues ?? {},
+      body.hostValues ?? {},
+    );
   } catch (err) {
-    if (err instanceof ConfigAssemblyError) {
-      return c.json({ error: err.message }, 400);
-    }
-    return c.json({ error: "Validation failed" }, 400);
+    return assemblyErrorResponse(c, err);
   }
 
   const isNew = !body.instanceId;
   const instanceId = body.instanceId ?? randomUUID();
 
   if (!isNew) {
-    const existing = await options.configStore.get(instanceId);
-    if (!existing) {
-      return c.json({ error: "Instance not found" }, 404);
-    }
-    if (existing.subject !== subject) {
-      return c.json({ error: "Forbidden" }, 403);
+    const editError = await validateIntakeEditAccess(
+      c,
+      options.configStore,
+      instanceId,
+      subject,
+    );
+    if (editError) {
+      return editError;
     }
   }
 
-  await options.configStore.set({ instanceId, subject, values });
+  await options.configStore.set({ instanceId, subject, directorySubject, values });
 
   if (options.onConfigSaved) {
     await options.onConfigSaved({
       c,
       instanceId,
       subject,
+      directorySubject,
       values,
       isNew,
     });

@@ -30,6 +30,10 @@ import {
   CONFIG_READY_MESSAGE,
   CONFIG_SAVED_MESSAGE,
 } from "../src/config-opener.js";
+import { createSignedConfigProof } from "./helpers/create-signed-config-proof.js";
+import { signObject } from "../src/signing.js";
+import type { SignedGrant } from "../src/envelope.js";
+import { sig2Payload } from "../src/envelope.js";
 import type { ModuleManifest } from "../src/manifest.js";
 
 const DEV_SESSION_COOKIE = "dev_session";
@@ -213,6 +217,7 @@ describe("config", () => {
       await store.set({
         instanceId: "inst-1",
         subject: "huglo:user:alice",
+        directorySubject: "huglo:user:alice",
         values: { label: "test" },
       });
 
@@ -220,6 +225,7 @@ describe("config", () => {
       expect(got).toEqual({
         instanceId: "inst-1",
         subject: "huglo:user:alice",
+        directorySubject: "huglo:user:alice",
         values: { label: "test" },
       });
 
@@ -231,11 +237,13 @@ describe("config", () => {
       await store.set({
         instanceId: "a",
         subject: "huglo:user:alice",
+        directorySubject: "huglo:user:alice",
         values: {},
       });
       await store.set({
         instanceId: "b",
         subject: "huglo:user:bob",
+        directorySubject: "huglo:user:bob",
         values: {},
       });
 
@@ -334,12 +342,21 @@ describe("config", () => {
 
   describe("config routes", () => {
     const keys = generateKeyPair();
+    const proofUserKeys = generateKeyPair();
     const directory = new InMemoryDirectoryClient();
     const configStore = new InMemoryConfigStore();
     const oauthClient = new InMemoryHugloOAuthClient({
       defaultSubject: "huglo:user:config-user",
     });
     const port = 9300 + Math.floor(Math.random() * 1000);
+
+    function configProof(subject = "huglo:user:config-user") {
+      return createSignedConfigProof({
+        subject,
+        audience: "config-module",
+        privateKey: proofUserKeys.privateKey,
+      });
+    }
 
     const mod = new Module({
       id: "config-module",
@@ -372,6 +389,7 @@ describe("config", () => {
     });
 
     beforeAll(async () => {
+      directory.registerUser("config-user", proofUserKeys.publicKey);
       directory.registerModule(
         "config-module",
         `http://127.0.0.1:${port}`,
@@ -398,7 +416,8 @@ describe("config", () => {
       expect(html).toContain("notifyReady");
       expect(html).toContain("huglo:config:ready");
       expect(html).toContain("window.opener");
-      expect(html).toContain('entry[0] === "type"');
+      expect(html).toContain('key === "type"');
+      expect(html).toContain("HOST_PROVIDED_FIELDS.has(key)");
       expect(html).toContain("huglo:config:saved");
       expect(html).toContain("window.close");
     });
@@ -411,6 +430,7 @@ describe("config", () => {
       await configStore.set({
         instanceId: "inst-a",
         subject: "huglo:user:config-user",
+        directorySubject: "huglo:user:config-user",
         values: {
           target: "locked-target",
           scope: "locked-scope",
@@ -421,6 +441,7 @@ describe("config", () => {
       await configStore.set({
         instanceId: "inst-b",
         subject: "huglo:user:config-user",
+        directorySubject: "huglo:user:config-user",
         values: {
           target: "locked-target",
           scope: "locked-scope",
@@ -440,6 +461,7 @@ describe("config", () => {
       expect(html).toContain('id="delete-btn"');
       expect(html).toContain("disableSelector");
       expect(html).toContain("HOST_PROVIDED_FIELDS");
+      expect(html).toContain("configProof");
       expect(html).toContain("inst-a");
       expect(html).toContain("inst-b");
     });
@@ -467,6 +489,7 @@ describe("config", () => {
       await configStore.set({
         instanceId: "inst-other",
         subject: "huglo:user:someone-else",
+        directorySubject: "huglo:user:someone-else",
         values: {
           target: "locked-target",
           scope: "locked-scope",
@@ -489,6 +512,7 @@ describe("config", () => {
       await configStore.set({
         instanceId: "inst-delete-me",
         subject: "huglo:user:config-user",
+        directorySubject: "huglo:user:config-user",
         values: {
           target: "locked-target",
           scope: "locked-scope",
@@ -541,9 +565,51 @@ describe("config", () => {
         body: JSON.stringify({
           userValues: { label: "x" },
           hostValues: { hostRef: "h" },
+          configProof: configProof(),
         }),
       });
       expect(res.status).toBe(401);
+    });
+
+    it("intake rejects without config proof", async () => {
+      const sessionCookie = createConfigSession(
+        "huglo:user:config-user",
+        "test-secret",
+      );
+      const res = await mod.getApp().request("/config/intake", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `${CONFIG_SESSION_COOKIE}=${sessionCookie}`,
+        },
+        body: JSON.stringify({
+          userValues: { label: "x" },
+          hostValues: { hostRef: "h" },
+        }),
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("intake rejects invalid config proof", async () => {
+      const sessionCookie = createConfigSession(
+        "huglo:user:config-user",
+        "test-secret",
+      );
+      const badProof = configProof();
+      badProof.signature = signObject(badProof.assertion, generateKeyPair().privateKey);
+      const res = await mod.getApp().request("/config/intake", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: `${CONFIG_SESSION_COOKIE}=${sessionCookie}`,
+        },
+        body: JSON.stringify({
+          userValues: { label: "x" },
+          hostValues: { hostRef: "h" },
+          configProof: badProof,
+        }),
+      });
+      expect(res.status).toBe(403);
     });
 
     it("mints instanceId on create and reuses on edit", async () => {
@@ -561,6 +627,7 @@ describe("config", () => {
         body: JSON.stringify({
           userValues: { label: "first" },
           hostValues: { hostRef: "host-1" },
+          configProof: configProof(),
         }),
       });
       expect(createRes.status).toBe(200);
@@ -569,6 +636,7 @@ describe("config", () => {
 
       const stored = await configStore.get(created.instanceId);
       expect(stored?.subject).toBe("huglo:user:config-user");
+      expect(stored?.directorySubject).toBe("huglo:user:config-user");
       expect(stored?.values).toMatchObject({
         target: "locked-target",
         scope: "locked-scope",
@@ -586,6 +654,7 @@ describe("config", () => {
           instanceId: created.instanceId,
           userValues: { label: "updated" },
           hostValues: { hostRef: "host-2" },
+          configProof: configProof("huglo:user:config-user"),
         }),
       });
       expect(editRes.status).toBe(200);
@@ -595,6 +664,7 @@ describe("config", () => {
       const afterEdit = await configStore.get(created.instanceId);
       expect(afterEdit?.values.label).toBe("updated");
       expect(afterEdit?.values.hostRef).toBe("host-2");
+      expect(afterEdit?.directorySubject).toBe("huglo:user:config-user");
     });
 
     it("OAuth callback happy path sets session and redirects to config", async () => {
@@ -651,6 +721,7 @@ describe("config", () => {
           instanceId: "does-not-exist",
           userValues: { label: "x" },
           hostValues: { hostRef: "h" },
+          configProof: configProof(),
         }),
       });
       expect(res.status).toBe(404);
@@ -660,6 +731,7 @@ describe("config", () => {
       await configStore.set({
         instanceId: "inst-other-user",
         subject: "huglo:user:someone-else",
+        directorySubject: "huglo:user:someone-else",
         values: {
           target: "locked-target",
           scope: "locked-scope",
@@ -679,6 +751,7 @@ describe("config", () => {
           instanceId: "inst-other-user",
           userValues: { label: "stolen" },
           hostValues: { hostRef: "h" },
+          configProof: configProof(),
         }),
       });
       expect(res.status).toBe(403);
@@ -687,13 +760,19 @@ describe("config", () => {
 
   describe("onConfigSaved hook", () => {
     const keys = generateKeyPair();
+    const hookProofKeys = generateKeyPair();
     const directory = new InMemoryDirectoryClient();
     const configStore = new InMemoryConfigStore();
     const oauthClient = new InMemoryHugloOAuthClient({
       defaultSubject: "huglo:user:hook-user",
     });
     const port = 9400 + Math.floor(Math.random() * 1000);
-    const savedCalls: Array<{ isNew: boolean; instanceId: string }> = [];
+    const savedCalls: Array<{
+      isNew: boolean;
+      instanceId: string;
+      subject: string;
+      directorySubject: string;
+    }> = [];
 
     const hookMod = new Module({
       id: "hook-module",
@@ -712,8 +791,8 @@ describe("config", () => {
         tokenUrl: "https://oauth.test/token",
         userInfoUrl: "https://oauth.test/userinfo",
       },
-      onConfigSaved: async ({ isNew, instanceId }) => {
-        savedCalls.push({ isNew, instanceId });
+      onConfigSaved: async ({ isNew, instanceId, subject, directorySubject }) => {
+        savedCalls.push({ isNew, instanceId, subject, directorySubject });
       },
     });
 
@@ -729,6 +808,7 @@ describe("config", () => {
     });
 
     beforeAll(async () => {
+      directory.registerUser("hook-user", hookProofKeys.publicKey);
       directory.registerModule("hook-module", `http://127.0.0.1:${port}`, keys.publicKey, keys.publicKeyBase64);
       await hookMod.listen(port, "127.0.0.1");
     });
@@ -750,6 +830,11 @@ describe("config", () => {
         body: JSON.stringify({
           userValues: { label: "new" },
           hostValues: { hostRef: "h1" },
+          configProof: createSignedConfigProof({
+            subject: "huglo:user:hook-user",
+            audience: "hook-module",
+            privateKey: hookProofKeys.privateKey,
+          }),
         }),
       });
       const created = (await createRes.json()) as { instanceId: string };
@@ -764,12 +849,27 @@ describe("config", () => {
           instanceId: created.instanceId,
           userValues: { label: "edited" },
           hostValues: { hostRef: "h2" },
+          configProof: createSignedConfigProof({
+            subject: "huglo:user:hook-user",
+            audience: "hook-module",
+            privateKey: hookProofKeys.privateKey,
+          }),
         }),
       });
 
       expect(savedCalls).toEqual([
-        { isNew: true, instanceId: created.instanceId },
-        { isNew: false, instanceId: created.instanceId },
+        {
+          isNew: true,
+          instanceId: created.instanceId,
+          subject: "huglo:user:hook-user",
+          directorySubject: "huglo:user:hook-user",
+        },
+        {
+          isNew: false,
+          instanceId: created.instanceId,
+          subject: "huglo:user:hook-user",
+          directorySubject: "huglo:user:hook-user",
+        },
       ]);
     });
   });
@@ -1101,6 +1201,169 @@ describe("config", () => {
       });
       expect(updateRes.status).toBe(200);
       expect(store.get(created.instanceId)?.apiKey).toBe("lifecycle-updated");
+    });
+  });
+
+  describe("config invoke enforcement", () => {
+    const holderKeys = generateKeyPair();
+    const requesterKeys = generateKeyPair();
+    const authorKeys = generateKeyPair();
+    const directory = new InMemoryDirectoryClient();
+    const configStore = new InMemoryConfigStore();
+    const oauthClient = new InMemoryHugloOAuthClient({
+      defaultSubject: "huglo:user:invoke-user",
+    });
+    const port = 9600 + Math.floor(Math.random() * 1000);
+
+    const invokeMod = new Module({
+      id: "invoke-config-module",
+      name: "Invoke Config",
+      description: "Config invoke test",
+      version: "1.0.0",
+      keyPair: holderKeys,
+      directory,
+      configStore,
+      oauthClient,
+      oauth: {
+        clientId: "test-client",
+        clientSecret: "test-secret",
+        redirectUri: `http://127.0.0.1:${port}/config/callback`,
+        authorizeUrl: "https://oauth.test/authorize",
+        tokenUrl: "https://oauth.test/token",
+        userInfoUrl: "https://oauth.test/userinfo",
+      },
+    });
+
+    const InputSchema = z.object({
+      context: z.object({
+        configInstanceId: z.string().optional(),
+      }),
+    });
+
+    invokeMod.config({
+      schema: z.object({ label: z.string() }),
+      fields: { label: "userEntered" },
+    });
+
+    invokeMod.scope("run:check", {
+      description: "Uses config at invoke",
+      input: InputSchema,
+      output: z.object({ hasConfig: z.boolean(), label: z.string().optional() }),
+      handler: async (ctx) => ({
+        hasConfig: ctx.config !== undefined,
+        label: ctx.config?.values.label as string | undefined,
+      }),
+    });
+
+    function buildGrant(subject = "huglo:user:invoke-user"): SignedGrant {
+      const grant = {
+        grant_id: "g-invoke-config",
+        holder: "invoke-config-module",
+        scope: "run:check",
+        subject,
+        requester: "foaf",
+        author: subject,
+        constraints: {},
+        issued_at: new Date(Date.now() - 60_000).toISOString(),
+        expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      };
+      return { grant, signature: signObject(grant, authorKeys.privateKey) };
+    }
+
+    function buildInvoke(grant: SignedGrant, configInstanceId?: string) {
+      const payload = {
+        context: configInstanceId ? { configInstanceId } : {},
+      };
+      const req = {
+        payload,
+        grant,
+        scope: "run:check",
+        timestamp: new Date().toISOString(),
+        nonce: crypto.randomUUID(),
+        requesterSignature: "",
+      };
+      req.requesterSignature = signObject(sig2Payload(req), requesterKeys.privateKey);
+      return req;
+    }
+
+    beforeAll(async () => {
+      directory.registerModule(
+        "invoke-config-module",
+        `http://127.0.0.1:${port}`,
+        holderKeys.publicKey,
+        holderKeys.publicKeyBase64,
+      );
+      directory.registerModule(
+        "foaf",
+        "http://127.0.0.1:59998",
+        requesterKeys.publicKey,
+        requesterKeys.publicKeyBase64,
+      );
+      directory.registerUser("invoke-user", authorKeys.publicKey);
+      await invokeMod.listen(port, "127.0.0.1");
+    });
+
+    afterAll(() => {
+      invokeMod.close();
+    });
+
+    it("allows invoke when directorySubject matches grant subject and injects ctx.config", async () => {
+      await configStore.set({
+        instanceId: "inst-match",
+        subject: "huglo:user:invoke-user",
+        directorySubject: "huglo:user:invoke-user",
+        values: { label: "matched" },
+      });
+
+      const res = await invokeMod.getApp().request("/invoke/run:check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Request-Id": crypto.randomUUID() },
+        body: JSON.stringify(buildInvoke(buildGrant(), "inst-match")),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { result: { hasConfig: boolean; label: string } };
+      expect(body.result.hasConfig).toBe(true);
+      expect(body.result.label).toBe("matched");
+    });
+
+    it("rejects invoke when directorySubject mismatches grant subject", async () => {
+      await configStore.set({
+        instanceId: "inst-mismatch",
+        subject: "huglo:user:invoke-user",
+        directorySubject: "huglo:user:someone-else",
+        values: { label: "stolen" },
+      });
+
+      const res = await invokeMod.getApp().request("/invoke/run:check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Request-Id": crypto.randomUUID() },
+        body: JSON.stringify(buildInvoke(buildGrant(), "inst-mismatch")),
+      });
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("config_subject_mismatch");
+    });
+
+    it("rejects invoke when configInstanceId is missing", async () => {
+      const res = await invokeMod.getApp().request("/invoke/run:check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Request-Id": crypto.randomUUID() },
+        body: JSON.stringify(buildInvoke(buildGrant())),
+      });
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("config_instance_required");
+    });
+
+    it("rejects invoke when config instance is missing", async () => {
+      const res = await invokeMod.getApp().request("/invoke/run:check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Request-Id": crypto.randomUUID() },
+        body: JSON.stringify(buildInvoke(buildGrant(), "inst-missing")),
+      });
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe("config_not_found");
     });
   });
 

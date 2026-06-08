@@ -88,7 +88,7 @@ const result = await module.call({
 });
 ```
 
-Protected scopes require a grant from the user. See [`HUGLO_SPECIFICATION.md`](HUGLO_SPECIFICATION.md) for the grant protocol.
+Protected scopes require a grant from the user. See [`docs/ai/HUGLO_SPECIFICATION.md`](docs/ai/HUGLO_SPECIFICATION.md) for the grant protocol.
 
 ### Open scope (no grant)
 
@@ -114,7 +114,8 @@ module.scope("status:read", {
 
 ## Learn more
 
-- [`HUGLO_SPECIFICATION.md`](HUGLO_SPECIFICATION.md) — federation protocol and directory API
+- [`docs/ai/HUGLO_SPECIFICATION.md`](docs/ai/HUGLO_SPECIFICATION.md) — federation protocol and directory API
+- [`docs/ai/CONFIG_IDENTITY_PROOF.md`](docs/ai/CONFIG_IDENTITY_PROOF.md) — config proof and two-session model
 - [`examples/trovi/`](examples/trovi/) — full runnable example (GitHub repo)
 
 ## License

@@ -195,7 +195,7 @@ describe("file storage", () => {
 
   it("mounts file routes when fileStore is set at startup", async () => {
     const keys = generateKeyPair();
-    const p = port + 2;
+    const p = 9300 + Math.floor(Math.random() * 1000);
     const ep = `http://127.0.0.1:${p}`;
     const store = new InMemoryFileStore();
     const mod = new Module({
@@ -208,7 +208,7 @@ describe("file storage", () => {
       fileStore: store,
     });
 
-    await mod.listen(p);
+    await mod.listen(p, "127.0.0.1");
     try {
       const res = await fetch(`${ep}/file/nonexistent-token`);
       expect(res.status).toBe(404);

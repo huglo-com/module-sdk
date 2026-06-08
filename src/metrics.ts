@@ -16,6 +16,9 @@ export type InvokeOutcome =
   | "scope_not_found"
   | "malformed_request"
   | "verification_failed"
+  | "config_not_found"
+  | "config_subject_mismatch"
+  | "config_instance_required"
   | "invalid_output"
   | "handler_error";
 

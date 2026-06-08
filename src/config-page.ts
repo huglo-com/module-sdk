@@ -134,6 +134,7 @@ export function configPageHtml(options: ConfigPageOptions): string {
     );
 
     const hostValues = {};
+    let configProof = null;
     let instanceId = INSTANCE_ID;
     let currentValues = Object.assign({}, EXISTING);
     let selectorEnabled = true;
@@ -307,8 +308,15 @@ export function configPageHtml(options: ConfigPageOptions): string {
       const data = event.data;
       if (!data || typeof data !== "object" || Array.isArray(data)) return;
       for (const entry of Object.entries(data)) {
-        if (entry[0] === "type") continue;
-        hostValues[entry[0]] = entry[1];
+        const key = entry[0];
+        if (key === "type") continue;
+        if (key === "configProof") {
+          configProof = entry[1];
+          continue;
+        }
+        if (HOST_PROVIDED_FIELDS.has(key)) {
+          hostValues[key] = entry[1];
+        }
       }
       const hostContext = Object.keys(hostValues).some(function (k) {
         return HOST_PROVIDED_FIELDS.has(k);
@@ -372,9 +380,14 @@ export function configPageHtml(options: ConfigPageOptions): string {
       const btn = document.getElementById("submit-btn");
       btn.disabled = true;
       try {
+        if (!configProof) {
+          showMessage("Missing config proof from host", "error");
+          return;
+        }
         const body = {
           userValues: collectUserValues(),
           hostValues: Object.assign({}, hostValues),
+          configProof: configProof,
         };
         const saveId = selectorEnabled ? instanceId : INSTANCE_ID;
         if (saveId) body.instanceId = saveId;
