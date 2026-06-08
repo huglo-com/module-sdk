@@ -25,8 +25,13 @@ export type {
   OAuthClientOptions,
   OnConfigSaved,
   OnConfigSavedContext,
+  RenderConfigPage,
+  RenderConfigPageContext,
+  RenderConfigPageResult,
   ConfigPageTheme,
+  ConfigInstanceEntry,
 } from "./module.js";
+export { configPageHtml } from "./module.js";
 export {
   InMemoryConfigStore,
   assembleConfigValues,
@@ -97,6 +102,9 @@ export type {
   OpenConfigPopupOptions,
   ConfigPopupWindow,
 } from "./config-opener.js";
+export {
+  verifyConfigProof,
+} from "./config-proof.js";
 
 
 // The following functions are exported only for testing purposes, they should not be used in the production code

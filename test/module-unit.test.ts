@@ -311,7 +311,35 @@ describe("Module unit", () => {
 
       const res = await after.request("/manifest");
       const manifest = (await res.json()) as ModuleManifest;
-      expect(manifest.config).toBeDefined();
+      expect(manifest.config).toBe(true);
+    });
+
+    it("customConfig returns the module instance", () => {
+      const handler = new Hono();
+      handler.get("/", (c) => c.text("custom"));
+      const module = createModule();
+      expect(module.customConfig(handler)).toBe(module);
+    });
+
+    it("customConfig module exposes config true in manifest without OAuth", async () => {
+      const handler = new Hono();
+      handler.get("/", (c) => c.text("custom"));
+      const module = createModule().customConfig(handler);
+
+      const res = await module.getApp().request("/manifest");
+      const manifest = (await res.json()) as ModuleManifest;
+      expect(manifest.config).toBe(true);
+      expect(manifest).not.toHaveProperty("fields");
+    });
+
+    it("customConfig mounts handler at GET /config", async () => {
+      const handler = new Hono();
+      handler.get("/", (c) => c.text("custom-config-page"));
+      const module = createModule().customConfig(handler);
+
+      const res = await module.getApp().request("/config");
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("custom-config-page");
     });
   });
 

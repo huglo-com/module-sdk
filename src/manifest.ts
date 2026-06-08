@@ -34,9 +34,7 @@ export interface ModuleManifest {
   publicKey: string;
   scopes: ScopeManifestEntry[];
   emitters: EmitterManifestEntry[];
-  config?: ConfigManifestEntry;
-  /** Present when the module overrides the default SDK config page. */
-  configPageUrl?: string;
+  config?: boolean;
 }
 
 export interface ScopeDefinition {
@@ -72,8 +70,7 @@ export function buildManifest(
     description: string;
     version: string;
     publicKey: string;
-    configDefinition?: ConfigDefinition;
-    configPageUrl?: string;
+    hasConfig?: boolean;
   },
   scopes: Map<string, ScopeDefinition>,
   emitters: Map<string, EmitterDefinition> = new Map(),
@@ -109,11 +106,8 @@ export function buildManifest(
     emitters: emitterEntries,
   };
 
-  if (config.configDefinition) {
-    manifest.config = buildConfigManifest(config.configDefinition);
-  }
-  if (config.configPageUrl) {
-    manifest.configPageUrl = config.configPageUrl;
+  if (config.hasConfig) {
+    manifest.config = true;
   }
 
   return manifest;

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Configure — host example</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 28rem; margin: 2rem auto; padding: 0 1rem; }
+    button { margin-top: 1rem; padding: 0.5rem 1rem; }
+    p { font-size: 0.875rem; color: #52525b; }
+    .error { color: #b91c1c; }
+    .success { color: #15803d; }
+  </style>
+</head>
+<body>
+  <h1>Configure acme-connector</h1>
+  <p>
+    Log into Huglo at <a href="https://account.huglo.com" target="_blank">account.huglo.com</a>
+    first (session cookie needed for mint).
+  </p>
+  <button type="button" id="configure-btn">Configure</button>
+  <p id="status"></p>
+
+  <script type="module">
+    const MODULE_ID = "acme-connector";
+    const DIRECTORY_URL = "https://account.huglo.com";
+    const CONFIG_URL = "http://127.0.0.1:3201/config";
+    const CONFIG_READY = "huglo:config:ready";
+    const CONFIG_SAVED = "huglo:config:saved";
+
+    function setStatus(text, kind) {
+      const el = document.getElementById("status");
+      el.textContent = text;
+      el.className = kind ?? "";
+    }
+
+    document.getElementById("configure-btn").addEventListener("click", async () => {
+      setStatus("");
+      try {
+        setStatus("Minting config proof…");
+        const mintUrl = DIRECTORY_URL.replace(/\/$/, "") + "/directory/config-assertions";
+        const res = await fetch(mintUrl, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ audience: MODULE_ID }),
+        });
+        if (!res.ok) {
+          throw new Error(`Mint failed (${res.status}): ${await res.text()}`);
+        }
+        const configProof = await res.json();
+
+        const configOrigin = new URL(CONFIG_URL).origin;
+        const popup = window.open(CONFIG_URL, "_blank", "width=480,height=720");
+        if (!popup) {
+          setStatus("Popup blocked", "error");
+          return;
+        }
+
+        function onMessage(event) {
+          if (event.source !== popup || event.origin !== configOrigin) return;
+          const data = event.data;
+          if (data?.type === CONFIG_READY) {
+            popup.postMessage({ configProof }, configOrigin);
+            return;
+          }
+          if (data?.type === CONFIG_SAVED && data.instanceId) {
+            window.removeEventListener("message", onMessage);
+            setStatus("Saved instance: " + data.instanceId, "success");
+          }
+        }
+
+        window.addEventListener("message", onMessage);
+        setStatus("Complete login and save in the popup.");
+      } catch (err) {
+        setStatus(err instanceof Error ? err.message : String(err), "error");
+      }
+    });
+  </script>
+</body>
+</html>

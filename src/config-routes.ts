@@ -5,10 +5,14 @@ import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { ConfigDefinition } from "./config.js";
 import { assembleConfigValues, ConfigAssemblyError, formatInstanceLabel } from "./config.js";
 import type { ConfigStore } from "./config-store.js";
+import type { DirectoryClient } from "./directory.js";
+import { verifyConfigProof } from "./config-proof.js";
+import { ModuleError } from "./errors.js";
+import type { NonceCache } from "./verify.js";
 import type { ConfigManifestEntry } from "./manifest.js";
 import { buildConfigManifest } from "./manifest.js";
 import { configPageHtml } from "./config-page.js";
-import type { ConfigPageTheme } from "./config-page.js";
+import type { ConfigInstanceEntry, ConfigPageTheme } from "./config-page.js";
 import {
   CONFIG_SESSION_COOKIE,
   OAUTH_STATE_COOKIE,
@@ -29,7 +33,10 @@ export const DEFAULT_CONFIG_PATH = "/config";
 export interface OnConfigSavedContext {
   c: Context;
   instanceId: string;
+  /** Session A — module OAuth login; UI tenancy (list/edit/delete). Not federation identity. */
   subject: string;
+  /** Session B — verified configProof subject; use for host sync, grants, audit, invoke binding. */
+  directorySubject: string;
   values: Record<string, unknown>;
   isNew: boolean;
 }
@@ -38,25 +45,42 @@ export type OnConfigSaved = (
   ctx: OnConfigSavedContext,
 ) => void | Promise<void>;
 
+export interface RenderConfigPageContext {
+  c: Context;
+  manifest: ConfigManifestEntry;
+  configPath: string;
+  subject: string | null;
+  instanceId?: string;
+  existingValues?: Record<string, unknown>;
+  instances: ConfigInstanceEntry[];
+  labelField: string | null;
+  theme?: ConfigPageTheme;
+}
+
+export type RenderConfigPageResult = Response | string | void;
+
+export type RenderConfigPage = (
+  ctx: RenderConfigPageContext,
+) => RenderConfigPageResult | Promise<RenderConfigPageResult>;
+
 export interface ConfigRoutesOptions {
+  moduleId: string;
+  directory: DirectoryClient;
   configDefinition: ConfigDefinition;
   configStore: ConfigStore;
   oauth: HugloOAuthClient;
   oauthOptions: OAuthClientOptions;
-  configPath?: string;
-  /** When set, the default page is not served; manifest exposes this URL instead. */
-  configPageUrl?: string;
   theme?: ConfigPageTheme;
+  renderConfigPage?: RenderConfigPage;
   onConfigSaved?: OnConfigSaved;
+  configProofNonceCache: NonceCache;
 }
 
 export function mountConfigRoutes(app: Hono, options: ConfigRoutesOptions): void {
-  const configPath = normalizePath(options.configPath ?? DEFAULT_CONFIG_PATH);
+  const configPath = DEFAULT_CONFIG_PATH;
   const manifest: ConfigManifestEntry = buildConfigManifest(options.configDefinition);
 
-  if (!options.configPageUrl) {
-    app.get(configPath, (c) => serveConfigPage(c, options, manifest, configPath));
-  }
+  app.get(configPath, (c) => serveConfigPage(c, options, manifest, configPath));
 
   app.get(`${configPath}/login`, (c) => {
     const existing = readConfigSession(
@@ -141,12 +165,12 @@ export function mountConfigRoutes(app: Hono, options: ConfigRoutesOptions): void
   );
 }
 
-async function serveConfigPage(
+async function buildRenderConfigPageContext(
   c: Context,
   options: ConfigRoutesOptions,
   manifest: ConfigManifestEntry,
   configPath: string,
-): Promise<Response> {
+): Promise<RenderConfigPageContext> {
   const subject = readConfigSession(
     getCookie(c, CONFIG_SESSION_COOKIE),
     options.oauthOptions.clientSecret,
@@ -161,11 +185,7 @@ async function serveConfigPage(
     }
   }
 
-  let instances: Array<{
-    instanceId: string;
-    label: string;
-    values: Record<string, unknown>;
-  }> = [];
+  let instances: ConfigInstanceEntry[] = [];
   if (subject) {
     const raw = await options.configStore.listBySubject(subject);
     instances = raw
@@ -179,18 +199,114 @@ async function serveConfigPage(
 
   const labelField = manifest.fields[0]?.name ?? null;
 
-  return c.html(
-    configPageHtml({
-      manifest,
-      configPath,
-      authenticated: !!subject,
-      instanceId: editId,
-      existingValues,
-      instances,
-      labelField,
-      theme: options.theme,
-    }),
-  );
+  return {
+    c,
+    manifest,
+    configPath,
+    subject,
+    instanceId: editId,
+    existingValues,
+    instances,
+    labelField,
+    theme: options.theme,
+  };
+}
+
+function defaultConfigPageHtml(ctx: RenderConfigPageContext): string {
+  return configPageHtml({
+    manifest: ctx.manifest,
+    configPath: ctx.configPath,
+    authenticated: ctx.subject !== null,
+    instanceId: ctx.instanceId,
+    existingValues: ctx.existingValues,
+    instances: ctx.instances,
+    labelField: ctx.labelField,
+    theme: ctx.theme,
+  });
+}
+
+function toConfigPageResponse(c: Context, result: Response | string): Response {
+  if (typeof result === "string") {
+    return c.html(result);
+  }
+  return result;
+}
+
+async function serveConfigPage(
+  c: Context,
+  options: ConfigRoutesOptions,
+  manifest: ConfigManifestEntry,
+  configPath: string,
+): Promise<Response> {
+  const ctx = await buildRenderConfigPageContext(c, options, manifest, configPath);
+
+  if (options.renderConfigPage) {
+    const result = await options.renderConfigPage(ctx);
+    if (result !== undefined) {
+      return toConfigPageResponse(c, result);
+    }
+  }
+
+  return c.html(defaultConfigPageHtml(ctx));
+}
+
+type IntakeBody = {
+  userValues?: Record<string, unknown>;
+  hostValues?: Record<string, unknown>;
+  instanceId?: string;
+  configProof?: unknown;
+};
+
+async function parseIntakeBody(c: Context): Promise<IntakeBody | Response> {
+  try {
+    return await c.req.json<IntakeBody>();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+}
+
+function proofVerificationErrorResponse(c: Context, err: unknown): Response {
+  if (err instanceof ModuleError) {
+    const status = err.code.startsWith("config_proof_") ? 403 : 400;
+    return c.json({ error: err.message, code: err.code }, status);
+  }
+  return c.json({ error: "Invalid config proof" }, 403);
+}
+
+function assemblyErrorResponse(c: Context, err: unknown): Response {
+  if (err instanceof ConfigAssemblyError) {
+    return c.json({ error: err.message }, 400);
+  }
+  return c.json({ error: "Validation failed" }, 400);
+}
+
+function assembleIntakeValues(
+  options: ConfigRoutesOptions,
+  userValues: Record<string, unknown>,
+  hostValues: Record<string, unknown>,
+): Record<string, unknown> {
+  const assembled = assembleConfigValues({
+    definition: options.configDefinition,
+    userValues,
+    hostValues,
+  });
+  return assembled.values;
+}
+
+async function validateIntakeEditAccess(
+  c: Context,
+  configStore: ConfigStore,
+  instanceId: string,
+  subject: string,
+): Promise<Response | null> {
+  const existing = await configStore.get(instanceId);
+  if (!existing) {
+    return c.json({ error: "Instance not found" }, 404);
+  }
+  if (existing.subject !== subject) {
+    return c.json({ error: "Forbidden" }, 403);
+  }
+  return null;
 }
 
 async function handleIntake(
@@ -205,55 +321,60 @@ async function handleIntake(
     return c.json({ error: "Authentication required" }, 401);
   }
 
-  let body: {
-    userValues?: Record<string, unknown>;
-    hostValues?: Record<string, unknown>;
-    instanceId?: string;
-  };
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: "Invalid JSON body" }, 400);
+  const body = await parseIntakeBody(c);
+  if (body instanceof Response) {
+    return body;
   }
 
-  const userValues = body.userValues ?? {};
-  const hostValues = body.hostValues ?? {};
+  if (body.configProof === undefined) {
+    return c.json({ error: "Config proof required" }, 400);
+  }
+
+  let directorySubject: string;
+  try {
+    directorySubject = await verifyConfigProof(body.configProof, {
+      moduleId: options.moduleId,
+      directory: options.directory,
+      nonceCache: options.configProofNonceCache,
+    });
+  } catch (err) {
+    return proofVerificationErrorResponse(c, err);
+  }
 
   let values: Record<string, unknown>;
   try {
-    const assembled = assembleConfigValues({
-      definition: options.configDefinition,
-      userValues,
-      hostValues,
-    });
-    values = assembled.values;
+    values = assembleIntakeValues(
+      options,
+      body.userValues ?? {},
+      body.hostValues ?? {},
+    );
   } catch (err) {
-    if (err instanceof ConfigAssemblyError) {
-      return c.json({ error: err.message }, 400);
-    }
-    return c.json({ error: "Validation failed" }, 400);
+    return assemblyErrorResponse(c, err);
   }
 
   const isNew = !body.instanceId;
   const instanceId = body.instanceId ?? randomUUID();
 
   if (!isNew) {
-    const existing = await options.configStore.get(instanceId);
-    if (!existing) {
-      return c.json({ error: "Instance not found" }, 404);
-    }
-    if (existing.subject !== subject) {
-      return c.json({ error: "Forbidden" }, 403);
+    const editError = await validateIntakeEditAccess(
+      c,
+      options.configStore,
+      instanceId,
+      subject,
+    );
+    if (editError) {
+      return editError;
     }
   }
 
-  await options.configStore.set({ instanceId, subject, values });
+  await options.configStore.set({ instanceId, subject, directorySubject, values });
 
   if (options.onConfigSaved) {
     await options.onConfigSaved({
       c,
       instanceId,
       subject,
+      directorySubject,
       values,
       isNew,
     });
@@ -289,10 +410,6 @@ async function handleDeleteInstance(
 
   await options.configStore.delete(instanceId);
   return c.json({ ok: true });
-}
-
-function normalizePath(path: string): string {
-  return path.startsWith("/") ? path : `/${path}`;
 }
 
 function clearOAuthCookies(c: Context): void {

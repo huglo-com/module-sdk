@@ -28,6 +28,8 @@ export interface VerifiedProtectedContext<I> {
   scope: string;
   requestId: string;
   dryRun: boolean;
+  /** Resolved config instance (see server resolveInvokeConfigContext; TODO: move to flowbuilder extension). */
+  config?: { instanceId: string; values: Record<string, unknown> };
 }
 
 export interface VerifiedOpenContext<I> {

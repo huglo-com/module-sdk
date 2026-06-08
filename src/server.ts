@@ -32,7 +32,7 @@ import {
 } from "./grant-callback.js";
 import type { ConfigDefinition } from "./config.js";
 import type { ConfigStore } from "./config-store.js";
-import { mountConfigRoutes, type OnConfigSaved } from "./config-routes.js";
+import { mountConfigRoutes, DEFAULT_CONFIG_PATH, type OnConfigSaved, type RenderConfigPage } from "./config-routes.js";
 import type { ConfigPageTheme } from "./config-page.js";
 import type { HugloOAuthClient, OAuthClientOptions } from "./oauth.js";
 import type { FileStore } from "./file-store.js";
@@ -75,9 +75,10 @@ export interface ServerConfig {
   configStore?: ConfigStore;
   oauth?: HugloOAuthClient;
   oauthOptions?: OAuthClientOptions;
-  configPath?: string;
-  configPageUrl?: string;
+  hasConfig?: boolean;
+  customConfigHandler?: Hono;
   configTheme?: ConfigPageTheme;
+  renderConfigPage?: RenderConfigPage;
   onConfigSaved?: OnConfigSaved;
   fileStore?: FileStore;
   metrics?: ModuleMetrics;
@@ -90,11 +91,13 @@ export type ScopeHandler<I, O> = (ctx: Ctx<I>) => Promise<O>;
 
 export interface CreateServerOptions extends ServerConfig {
   nonceCache?: NonceCache;
+  configProofNonceCache?: NonceCache;
 }
 
 export function createModuleServer(options: CreateServerOptions): Hono {
   const app = new Hono();
   const nonceCache = options.nonceCache ?? new NonceCache();
+  const configProofNonceCache = options.configProofNonceCache ?? new NonceCache();
 
   app.get("/health", (c) => c.json({ status: "ok", module: options.moduleId }));
 
@@ -111,8 +114,7 @@ export function createModuleServer(options: CreateServerOptions): Hono {
         description: options.description,
         version: options.version,
         publicKey: options.publicKeyBase64,
-        configDefinition: options.configDefinition,
-        configPageUrl: options.configPageUrl,
+        hasConfig: options.hasConfig,
       },
       options.scopes,
       options.emitters ?? new Map(),
@@ -169,21 +171,25 @@ export function createModuleServer(options: CreateServerOptions): Hono {
     });
   }
 
-  if (
+  if (options.customConfigHandler) {
+    app.route(DEFAULT_CONFIG_PATH, options.customConfigHandler);
+  } else if (
     options.configDefinition &&
     options.configStore &&
     options.oauth &&
     options.oauthOptions
   ) {
     mountConfigRoutes(app, {
+      moduleId: options.moduleId,
+      directory: options.directory,
       configDefinition: options.configDefinition,
       configStore: options.configStore,
       oauth: options.oauth,
       oauthOptions: options.oauthOptions,
-      configPath: options.configPath,
-      configPageUrl: options.configPageUrl,
       theme: options.configTheme,
+      renderConfigPage: options.renderConfigPage,
       onConfigSaved: options.onConfigSaved,
+      configProofNonceCache,
     });
   }
 
@@ -241,6 +247,22 @@ export function createModuleServer(options: CreateServerOptions): Hono {
       const normalized = err instanceof ModuleError ? err : authModuleError("verification_failed", "Verification failed");
       const status = normalized.retryable ? 503 : 401;
       return c.json(buildSignedErrorResponse(requestId, normalized, options.privateKey), status);
+    }
+
+    // TODO(module-sdk-extensions): Move invoke-time config resolution to a separate
+    // flowbuilder-oriented extension package. Core SDK should not assume
+    // input.context.configInstanceId host payload shape.
+    if (options.configStore) {
+      const configResolved = await resolveInvokeConfigContext(options.configStore, verified);
+      if (!configResolved.ok) {
+        endInvokeTimer?.();
+        options.metrics?.recordInvoke(urlScope, configResolved.outcome);
+        return c.json(
+          buildSignedErrorResponse(requestId, configResolved.error, options.privateKey),
+          403,
+        );
+      }
+      verified = configResolved.verified;
     }
 
     try {
@@ -475,6 +497,80 @@ async function verifyInvokeForScope(
 
 function authModuleError(code: string, message: string): ModuleError {
   return new ModuleError({ code, message, retryable: false });
+}
+
+type InvokeConfigOutcome = "config_not_found" | "config_subject_mismatch" | "config_instance_required";
+
+type InvokeConfigResolveResult =
+  | { ok: true; verified: VerifiedInvokeContext<unknown> }
+  | { ok: false; outcome: InvokeConfigOutcome; error: ModuleError };
+
+// TODO(module-sdk-extensions): Relocate to flowbuilder extension — auto-resolves
+// context.configInstanceId and enforces directorySubject vs grant subject.
+async function resolveInvokeConfigContext(
+  configStore: ConfigStore,
+  verified: VerifiedInvokeContext<unknown>,
+): Promise<InvokeConfigResolveResult> {
+  if (verified.open) {
+    return { ok: true, verified };
+  }
+
+  const configInstanceId = extractConfigInstanceId(verified.input);
+  if (!configInstanceId) {
+    return {
+      ok: false,
+      outcome: "config_instance_required",
+      error: authModuleError(
+        "config_instance_required",
+        "Protected invoke on a config-enabled module requires context.configInstanceId",
+      ),
+    };
+  }
+
+  const inst = await configStore.get(configInstanceId);
+  if (!inst) {
+    return {
+      ok: false,
+      outcome: "config_not_found",
+      error: authModuleError(
+        "config_not_found",
+        "No configuration found for this config instance",
+      ),
+    };
+  }
+
+  if (inst.directorySubject !== verified.subject) {
+    return {
+      ok: false,
+      outcome: "config_subject_mismatch",
+      error: authModuleError(
+        "config_subject_mismatch",
+        "Config instance does not belong to grant subject",
+      ),
+    };
+  }
+
+  return {
+    ok: true,
+    verified: {
+      ...verified,
+      config: { instanceId: inst.instanceId, values: inst.values },
+    },
+  };
+}
+
+// TODO(module-sdk-extensions): Relocate to flowbuilder extension — hardcoded
+// convention that host injects configInstanceId at input.context.configInstanceId.
+function extractConfigInstanceId(input: unknown): string | undefined {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return undefined;
+  }
+  const context = (input as { context?: unknown }).context;
+  if (typeof context !== "object" || context === null || Array.isArray(context)) {
+    return undefined;
+  }
+  const id = (context as { configInstanceId?: unknown }).configInstanceId;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
 function buildSignedSuccessResponse(

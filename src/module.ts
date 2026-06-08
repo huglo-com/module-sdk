@@ -27,7 +27,7 @@ import {
   type HugloOAuthClient,
   type OAuthClientOptions,
 } from "./oauth.js";
-import type { OnConfigSaved } from "./config-routes.js";
+import type { OnConfigSaved, RenderConfigPage } from "./config-routes.js";
 import { DEFAULT_CONFIG_PATH } from "./config-routes.js";
 import type { ConfigPageTheme } from "./config-page.js";
 import type { FileStore } from "./file-store.js";
@@ -76,9 +76,10 @@ export {
   readPkceCookie,
 } from "./oauth.js";
 export type { OAuthPkceParams } from "./oauth.js";
-export type { OnConfigSaved, OnConfigSavedContext } from "./config-routes.js";
+export type { OnConfigSaved, OnConfigSavedContext, RenderConfigPage, RenderConfigPageContext, RenderConfigPageResult } from "./config-routes.js";
 export { DEFAULT_CONFIG_PATH } from "./config-routes.js";
-export type { ConfigPageTheme } from "./config-page.js";
+export type { ConfigPageTheme, ConfigInstanceEntry } from "./config-page.js";
+export { configPageHtml } from "./config-page.js";
 export type { FileStore, StoredFile } from "./file-store.js";
 export { InMemoryFileStore } from "./file-store.js";
 export {
@@ -133,12 +134,10 @@ export interface ModuleConfig extends GrantCallbackOptions {
   oauthClient?: HugloOAuthClient;
   /** Per-instance config persistence (required when using config()). */
   configStore?: ConfigStore;
-  /** Config UI path (default: /config). */
-  configPath?: string;
-  /** Override default SDK config page URL (published in manifest). */
-  configPageUrl?: string;
   /** Light theming for the default config page. */
   theme?: ConfigPageTheme;
+  /** Custom config page renderer at GET /config. Omit for built-in page; return void to fall back. */
+  renderConfigPage?: RenderConfigPage;
   /** Hook after config intake saves an instance (provisioning, grant invites, etc.). */
   onConfigSaved?: OnConfigSaved;
   /** Ephemeral file persistence (defaults to in-memory when using createFile()). */
@@ -212,6 +211,7 @@ export class Module {
   private readonly scopes = new Map<string, RegisteredScope<z.ZodType, z.ZodType>>();
   private readonly emitters = new Map<string, EmitterDefinition>();
   private configDefinition: ConfigDefinition | undefined;
+  private customConfigHandler: Hono | undefined;
   private defaultConfigStore: ConfigStore | undefined;
   private defaultFileStore: InMemoryFileStore | undefined;
   private readonly moduleMetrics: ModuleMetrics | undefined;
@@ -279,7 +279,23 @@ export class Module {
    * Enables config routes, Huglo OAuth login, and /manifest config output.
    */
   config(options: ConfigDefinition): this {
+    if (this.customConfigHandler) {
+      throw new Error("config() cannot be combined with customConfig()");
+    }
     this.configDefinition = options;
+    this.app = null;
+    return this;
+  }
+
+  /**
+   * Full custom config: developer owns all routes under /config (auth, save, postMessage).
+   * Mutually exclusive with config(). No schema or OAuth required.
+   */
+  customConfig(handler: Hono): this {
+    if (this.configDefinition) {
+      throw new Error("customConfig() cannot be combined with config()");
+    }
+    this.customConfigHandler = handler;
     this.app = null;
     return this;
   }
@@ -397,9 +413,10 @@ export class Module {
       configStore: configRuntime?.configStore,
       oauth: configRuntime?.oauth,
       oauthOptions: configRuntime?.oauthOptions,
-      configPath: this.init.configPath ?? DEFAULT_CONFIG_PATH,
-      configPageUrl: this.init.configPageUrl,
+      hasConfig: !!(this.configDefinition || this.customConfigHandler),
+      customConfigHandler: this.customConfigHandler,
       configTheme: this.init.theme,
+      renderConfigPage: this.init.renderConfigPage,
       onConfigSaved: this.init.onConfigSaved,
       fileStore: this.getFileStoreForServer(),
       metrics: this.moduleMetrics,
