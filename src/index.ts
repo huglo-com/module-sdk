@@ -50,6 +50,8 @@ export {
 } from "./module.js";
 export type { OAuthPkceParams } from "./module.js";
 export type {
+  ModuleManifest,
+  ScopeManifestEntry,
   EmitterManifestEntry,
   EmitterDefinition,
   ConfigManifestEntry,
