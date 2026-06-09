@@ -9,7 +9,7 @@ export const fileObjectSchema = z.object({
   expires_at: z.iso.datetime(),
 });
 
-export const fileType: TypeDefinition = {
+export const fileType: TypeDefinition<typeof fileObjectSchema> = {
   id: "huglo:file",
   schema: fileObjectSchema,
   display: {
