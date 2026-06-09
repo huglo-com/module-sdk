@@ -26,7 +26,7 @@ The protocol supports:
 - **Module** — an HTTP service with a stable module id, Ed25519 keypair, manifest, and one or more callable scopes.
 - **Scope** — a named capability exposed by a holder module. Protected scopes use signed grants; open scopes use signed requester envelopes.
 - **Grant** — a signed authorization saying that an author permits a requester module to call a holder module's scope for a subject.
-- **Manifest** — a public description of a module's id, metadata, public key, scopes, optional configuration contract, and emitters.
+- **Manifest** — a public description of a module's id, metadata, public key, scopes, optional flow type descriptors (`types[]`), optional configuration contract, and emitters.
 - **Invite** — a signed requester intent that asks the directory provider to start user approval and grant issuance.
 - **Revocation list** — the current set of grant ids that holders must reject.
 - **Canonical JSON** — every signature uses RFC 8785 canonicalization so independent parties sign and verify the same bytes.
@@ -45,7 +45,7 @@ Modules can run against Huglo's hosted directory or a custom compatible identity
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/health` | Basic module health check. |
-| GET | `/manifest` | Public module manifest: metadata, public key, scopes, emitters, and optional config metadata. |
+| GET | `/manifest` | Public module manifest: metadata, public key, scopes, emitters, optional `types[]` (registered flow port types), and optional config metadata. See [STRUCTURAL_TYPES.md](./STRUCTURAL_TYPES.md). |
 | GET | `/.well-known/huglo-challenge` | Signed ownership challenge response used during module registration. |
 | POST | `/invoke/:scope` | Main module-to-module invocation endpoint for protected and open scopes. |
 | GET | `/grant/init` | Optional helper path for starting grant authorization flows. Derived from the callback path when customized. |

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ConfigDefinition, FieldSource } from "./config.js";
+import type { TypeManifestEntry } from "./type-system.js";
 
 export interface ScopeManifestEntry {
   name: string;
@@ -34,6 +35,7 @@ export interface ModuleManifest {
   publicKey: string;
   scopes: ScopeManifestEntry[];
   emitters: EmitterManifestEntry[];
+  types?: TypeManifestEntry[];
   config?: boolean;
 }
 
@@ -74,6 +76,7 @@ export function buildManifest(
   },
   scopes: Map<string, ScopeDefinition>,
   emitters: Map<string, EmitterDefinition> = new Map(),
+  types: Map<string, TypeManifestEntry> = new Map(),
 ): ModuleManifest {
   const scopeEntries: ScopeManifestEntry[] = [];
   for (const [name, def] of scopes) {
@@ -108,6 +111,10 @@ export function buildManifest(
 
   if (config.hasConfig) {
     manifest.config = true;
+  }
+
+  if (types.size > 0) {
+    manifest.types = [...types.values()];
   }
 
   return manifest;

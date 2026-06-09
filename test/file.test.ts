@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { z } from "zod";
 import { generateKeyPair } from "../src/keys.js";
 import { Module } from "../src/module.js";
-import { FileSchema } from "../src/file.js";
+import { fileType } from "../src/builtin-types/index.js";
+import { fileObjectSchema } from "../src/builtin-types/file.js";
 import { InMemoryFileStore } from "../src/file-store.js";
 import type { ModuleManifest } from "../src/manifest.js";
 
@@ -13,7 +14,8 @@ describe("file storage", () => {
 
   beforeAll(async () => {
     const keys = generateKeyPair();
-    port = 9200 + Math.floor(Math.random() * 1000);
+    // Dedicated range to avoid collisions with emitter/config tests (9200+).
+    port = 8800 + Math.floor(Math.random() * 100);
     endpoint = `http://127.0.0.1:${port}`;
 
     module = new Module({
@@ -25,22 +27,32 @@ describe("file storage", () => {
       endpoint,
     });
 
-    await module.listen(port);
+    module.getFileStore();
+    await module.listen(port, "127.0.0.1");
   });
 
   afterAll(() => {
     module.close();
   });
 
-  it("emits { type: file } in toJSONSchema", () => {
-    const jsonSchema = z.toJSONSchema(FileSchema, { io: "output" });
-    expect(jsonSchema).toMatchObject({ type: "file" });
+  it("emits { type: huglo:file } in toJSONSchema after registerType", () => {
+    const keys = generateKeyPair();
+    const mod = new Module({
+      id: "file-tag",
+      name: "File tag",
+      description: "Test",
+      version: "1.0.0",
+      keyPair: keys,
+    });
+    const HugloFile = mod.registerType(fileType);
+    const jsonSchema = z.toJSONSchema(HugloFile, { io: "output" });
+    expect(jsonSchema).toMatchObject({ type: "huglo:file" });
     expect(jsonSchema).not.toHaveProperty("properties");
   });
 
-  it("lists file type in /manifest when used as scope output", async () => {
+  it("lists huglo:file in /manifest types[] and scope output when registered", async () => {
     const keys = generateKeyPair();
-    const p = port + 4;
+    const p = port + 1;
     const mod = new Module({
       id: "file-manifest",
       name: "File manifest",
@@ -50,23 +62,32 @@ describe("file storage", () => {
       endpoint: `http://127.0.0.1:${p}`,
     });
 
+    const HugloFile = mod.registerType(fileType);
+
     mod.scope("files:upload", {
       description: "Upload a file",
       input: z.object({}),
-      output: FileSchema,
+      output: HugloFile,
       handler: async () => {
         throw new Error("not invoked in this test");
       },
     });
 
-    await mod.listen(p);
+    await mod.listen(p, "127.0.0.1");
     try {
       const res = await fetch(`http://127.0.0.1:${p}/manifest`);
       expect(res.status).toBe(200);
       const manifest = (await res.json()) as ModuleManifest;
       const scope = manifest.scopes.find((s) => s.name === "files:upload");
-      expect(scope?.output).toMatchObject({ type: "file" });
+      expect(scope?.output).toMatchObject({ type: "huglo:file" });
       expect(scope?.output).not.toHaveProperty("properties");
+
+      expect(manifest.types).toBeDefined();
+      const fileTypeEntry = manifest.types?.find((t) => t.id === "huglo:file");
+      expect(fileTypeEntry).toBeDefined();
+      expect(fileTypeEntry?.schemaHash).toMatch(/^sha256-v1:/);
+      expect(fileTypeEntry?.display.label).toBe("file");
+      expect(fileTypeEntry?.operators.length).toBeGreaterThan(0);
     } finally {
       mod.close();
     }
@@ -81,7 +102,7 @@ describe("file storage", () => {
       expires_at,
     });
 
-    expect(FileSchema.safeParse(file).success).toBe(true);
+    expect(fileObjectSchema.safeParse(file).success).toBe(true);
     expect(file.url).toBe(`${endpoint}/file/${file.url.split("/").pop()}`);
     expect(file.size).toBe(10);
     expect(file.content_type).toBe("text/plain");
@@ -195,7 +216,7 @@ describe("file storage", () => {
 
   it("mounts file routes when fileStore is set at startup", async () => {
     const keys = generateKeyPair();
-    const p = 9300 + Math.floor(Math.random() * 1000);
+    const p = port + 2;
     const ep = `http://127.0.0.1:${p}`;
     const store = new InMemoryFileStore();
     const mod = new Module({

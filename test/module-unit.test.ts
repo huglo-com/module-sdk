@@ -13,6 +13,7 @@ import { InMemoryHugloOAuthClient } from "../src/oauth.js";
 import { signObject } from "../src/signing.js";
 import type { SignedGrant } from "../src/envelope.js";
 import type { ModuleManifest } from "../src/manifest.js";
+import { fileType } from "../src/builtin-types/index.js";
 
 function createModule(
   overrides: Partial<ConstructorParameters<typeof Module>[0]> = {},
@@ -282,6 +283,38 @@ describe("Module unit", () => {
 
       expect(manifest.scopes.map((s) => s.name)).toContain("items:read");
       expect(manifest.emitters.map((e) => e.name)).toContain("item.created");
+    });
+
+    it("omits types[] from manifest when registerType is not used", async () => {
+      const module = createModule();
+      const res = await module.getApp().request("/manifest");
+      const manifest = (await res.json()) as ModuleManifest;
+      expect(manifest.types).toBeUndefined();
+    });
+
+    it("includes types[] in manifest after registerType", async () => {
+      const module = createModule();
+      const HugloFile = module.registerType(fileType);
+
+      module.scope("files:read", {
+        description: "Read file",
+        input: z.object({}),
+        output: HugloFile,
+        handler: async () => {
+          throw new Error("not invoked");
+        },
+      });
+
+      const res = await module.getApp().request("/manifest");
+      const manifest = (await res.json()) as ModuleManifest;
+
+      expect(manifest.types).toBeDefined();
+      expect(manifest.types).toHaveLength(1);
+      expect(manifest.types![0]!.id).toBe("huglo:file");
+      expect(manifest.types![0]!.schemaHash).toMatch(/^sha256-v1:/);
+
+      const scope = manifest.scopes.find((s) => s.name === "files:read");
+      expect(scope?.output).toMatchObject({ type: "huglo:file" });
     });
 
     it("mounts custom api routes at /api/*", async () => {
