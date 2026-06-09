@@ -1,21 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { create, parse } from "content-disposition";
-import { z } from "zod";
+import type { z } from "zod";
 import type { FileStore } from "./file-store.js";
+import { fileObjectSchema } from "./builtin-types/file.js";
 
-const fileObjectSchema = z.object({
-  url: z.string().min(1),
-  content_type: z.string().min(1),
-  filename: z.string().min(1),
-  size: z.number().int().nonnegative(),
-  expires_at: z.iso.datetime(),
-});
-
-export const FileSchema = fileObjectSchema;
-// Huglo manifest extension (not standard JSON Schema); runtime validation uses fileObjectSchema.
-FileSchema._zod.toJSONSchema = () => ({ type: "file" });
-
-export type File = z.infer<typeof FileSchema>;
+export type File = z.infer<typeof fileObjectSchema>;
 
 export const DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 
@@ -166,7 +155,7 @@ export async function createFileRecord(
   });
 
   const base = endpoint.replaceAll(/\/$/g, "");
-  return FileSchema.parse({
+  return fileObjectSchema.parse({
     url: `${base}/file/${token}`,
     content_type,
     filename,

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
-import type { z } from "zod";
+import { z } from "zod";
 import type { ModuleKeyPair } from "./keys.js";
 import type { DirectoryClient } from "./directory.js";
 import { HttpDirectoryClient } from "./directory.js";
@@ -43,6 +43,12 @@ import type {
   InviteScopeRequest,
   SignedGrant,
 } from "./envelope.js";
+import {
+  computeSchemaHash,
+  tagSchema,
+  type TypeDefinition,
+  type TypeManifestEntry,
+} from "./type-system.js";
 
 export { ModuleError } from "./errors.js";
 export type { Ctx, ProtectedCtx, OpenCtx } from "./context.js";
@@ -83,13 +89,20 @@ export { configPageHtml } from "./config-page.js";
 export type { FileStore, StoredFile } from "./file-store.js";
 export { InMemoryFileStore } from "./file-store.js";
 export {
-  FileSchema,
   type File,
   type CreateFileOptions,
   type CreateFileDataOptions,
   type CreateFileUrlOptions,
   DEFAULT_MAX_FILE_BYTES,
 } from "./file.js";
+export { fileType, builtinTypes } from "./builtin-types/index.js";
+export type {
+  TypeDefinition,
+  TypeDisplay,
+  TypeOperator,
+  TypeManifestEntry,
+} from "./type-system.js";
+export { computeSchemaHash, tagSchema } from "./type-system.js";
 export { loadKeyPair, generateKeyPair } from "./keys.js";
 
 /** Production Huglo directory URL used when none is configured. */
@@ -210,6 +223,7 @@ export class Module {
   private readonly directory: DirectoryClient;
   private readonly scopes = new Map<string, RegisteredScope<z.ZodType, z.ZodType>>();
   private readonly emitters = new Map<string, EmitterDefinition>();
+  private readonly types = new Map<string, TypeManifestEntry>();
   private configDefinition: ConfigDefinition | undefined;
   private customConfigHandler: Hono | undefined;
   private defaultConfigStore: ConfigStore | undefined;
@@ -260,6 +274,27 @@ export class Module {
       handler: options.handler as ScopeHandler<unknown, unknown>,
     });
     return this;
+  }
+
+  /**
+   * Register a structural port type. Stores into types Map, returns the tagged
+   * Zod schema for use in scope/emitter I/O. Published in /manifest types[].
+   */
+  registerType<T extends z.ZodType>(def: TypeDefinition<T>): T {
+    if (this.types.has(def.id)) {
+      throw new Error(`Type already registered: ${def.id}`);
+    }
+    const expanded = z.toJSONSchema(def.schema, { io: "output" }) as Record<string, unknown>;
+    const schemaHash = computeSchemaHash(expanded, (id) => this.types.get(id)?.schemaHash);
+    this.types.set(def.id, {
+      id: def.id,
+      schema: expanded,
+      schemaHash,
+      display: def.display,
+      operators: def.operators ?? [],
+    });
+    tagSchema(def.schema, def.id);
+    return def.schema;
   }
 
   /**
@@ -400,6 +435,7 @@ export class Module {
       directory: this.directory,
       scopes: this.scopes,
       emitters: this.emitters,
+      types: this.types,
       challenge: this.init.challenge,
       endpoint: this.init.endpoint,
       assetsDir: this.init.assetsDir,

@@ -55,6 +55,14 @@ export type {
   ConfigManifestEntry,
   ConfigManifestFieldEntry,
 } from "./manifest.js";
+export type { TypeManifestEntry } from "./type-system.js";
+export type {
+  TypeDefinition,
+  TypeDisplay,
+  TypeOperator,
+} from "./type-system.js";
+export { computeSchemaHash, tagSchema } from "./type-system.js";
+export { fileType, builtinTypes } from "./builtin-types/index.js";
 export type { Ctx, ProtectedCtx, OpenCtx } from "./context.js";
 export type {
   SignedGrant,
@@ -74,7 +82,6 @@ export { InMemoryGrantStore } from "./store.js";
 export type { FileStore, StoredFile } from "./file-store.js";
 export { InMemoryFileStore } from "./file-store.js";
 export {
-  FileSchema,
   type File,
   type CreateFileOptions,
   type CreateFileDataOptions,

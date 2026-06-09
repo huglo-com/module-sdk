@@ -17,6 +17,7 @@ import {
   type VerifyOptions,
 } from "./verify.js";
 import { buildManifest, type ModuleManifest, type ScopeDefinition, type EmitterDefinition } from "./manifest.js";
+import type { TypeManifestEntry } from "./type-system.js";
 import { buildSignedChallenge } from "./challenge.js";
 import type { Ctx, ProtectedCtx, OpenCtx } from "./context.js";
 import type { GrantStore } from "./store.js";
@@ -62,6 +63,7 @@ export interface ServerConfig {
   directory: DirectoryClient;
   scopes: Map<string, ScopeDefinition & { handler: ScopeHandler<unknown, unknown> }>;
   emitters?: Map<string, EmitterDefinition>;
+  types?: Map<string, TypeManifestEntry>;
   challenge?: string;
   endpoint?: string;
   assetsDir?: string;
@@ -118,6 +120,7 @@ export function createModuleServer(options: CreateServerOptions): Hono {
       },
       options.scopes,
       options.emitters ?? new Map(),
+      options.types ?? new Map(),
     );
     return c.json(manifest);
   });
