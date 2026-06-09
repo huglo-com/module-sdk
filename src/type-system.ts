@@ -22,6 +22,8 @@ export interface TypeDefinition<T extends z.ZodType = z.ZodType> {
   schema: T;
   display: TypeDisplay;
   operators?: TypeOperator[];
+  /** Optional example value for canvas manual input nodes. UI metadata only. */
+  sample?: Record<string, unknown>;
 }
 
 export interface TypeManifestEntry {
@@ -30,6 +32,7 @@ export interface TypeManifestEntry {
   schemaHash: string;
   display: TypeDisplay;
   operators: TypeOperator[];
+  sample?: Record<string, unknown>;
 }
 
 const JSON_SCHEMA_PRIMITIVE_TYPES = new Set([
@@ -96,14 +99,14 @@ export function computeSchemaHash(
   resolveChildHash?: (id: string) => string | undefined,
 ): string {
   const forHash =
-    resolveChildHash !== undefined
-      ? (resolveChildRefs(schema, (id) => {
+    resolveChildHash === undefined
+      ? schema
+      : (resolveChildRefs(schema, (id) => {
           if (JSON_SCHEMA_PRIMITIVE_TYPES.has(id)) {
             return undefined;
           }
           return resolveChildHash(id);
-        }) as Record<string, unknown>)
-      : schema;
+        }) as Record<string, unknown>);
 
   const bytes = canonicalizeToBytes(forHash);
   const hex = createHash("sha256").update(bytes).digest("hex");

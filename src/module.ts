@@ -28,7 +28,6 @@ import {
   type OAuthClientOptions,
 } from "./oauth.js";
 import type { OnConfigSaved, RenderConfigPage } from "./config-routes.js";
-import { DEFAULT_CONFIG_PATH } from "./config-routes.js";
 import type { ConfigPageTheme } from "./config-page.js";
 import type { FileStore } from "./file-store.js";
 import { InMemoryFileStore } from "./file-store.js";
@@ -286,13 +285,20 @@ export class Module {
     }
     const expanded = z.toJSONSchema(def.schema, { io: "output" }) as Record<string, unknown>;
     const schemaHash = computeSchemaHash(expanded, (id) => this.types.get(id)?.schemaHash);
-    this.types.set(def.id, {
+    if (def.sample !== undefined) {
+      def.schema.parse(def.sample);
+    }
+    const entry: TypeManifestEntry = {
       id: def.id,
       schema: expanded,
       schemaHash,
       display: def.display,
       operators: def.operators ?? [],
-    });
+    };
+    if (def.sample !== undefined) {
+      entry.sample = def.sample;
+    }
+    this.types.set(def.id, entry);
     tagSchema(def.schema, def.id);
     return def.schema;
   }
