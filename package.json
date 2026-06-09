@@ -1,6 +1,6 @@
 {
   "name": "@huglo/module-sdk",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "TypeScript SDK for Huglo federation modules",
   "main": "index.js",
   "scripts": {

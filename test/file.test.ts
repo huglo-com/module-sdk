@@ -88,6 +88,13 @@ describe("file storage", () => {
       expect(fileTypeEntry?.schemaHash).toMatch(/^sha256-v1:/);
       expect(fileTypeEntry?.display.label).toBe("file");
       expect(fileTypeEntry?.operators.length).toBeGreaterThan(0);
+      expect(fileTypeEntry?.sample).toEqual({
+        url: "https://picsum.photos/200/300",
+        content_type: "image/jpeg",
+        filename: "image.jpg",
+        size: 0,
+        expires_at: "2030-01-01T00:00:00.000Z",
+      });
     } finally {
       mod.close();
     }

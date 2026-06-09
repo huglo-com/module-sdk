@@ -41,4 +41,11 @@ export const fileType: TypeDefinition<typeof fileObjectSchema> = {
       op: "eq",
     },
   ],
+  sample: {
+    url: "https://picsum.photos/200/300",
+    content_type: "image/jpeg",
+    filename: "image.jpg",
+    size: 0,
+    expires_at: "2030-01-01T00:00:00.000Z",
+  },
 };

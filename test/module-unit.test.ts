@@ -312,9 +312,22 @@ describe("Module unit", () => {
       expect(manifest.types).toHaveLength(1);
       expect(manifest.types![0]!.id).toBe("huglo:file");
       expect(manifest.types![0]!.schemaHash).toMatch(/^sha256-v1:/);
+      expect(manifest.types![0]!.sample).toEqual(fileType.sample);
 
       const scope = manifest.scopes.find((s) => s.name === "files:read");
       expect(scope?.output).toMatchObject({ type: "huglo:file" });
+    });
+
+    it("throws when registerType sample fails schema validation", () => {
+      const module = createModule();
+      expect(() =>
+        module.registerType({
+          id: "test:bad-sample",
+          schema: z.object({ name: z.string().min(1) }),
+          display: { label: "bad", background: "#fff", border: "#000", color: "#000" },
+          sample: { name: "" },
+        }),
+      ).toThrow();
     });
 
     it("mounts custom api routes at /api/*", async () => {
