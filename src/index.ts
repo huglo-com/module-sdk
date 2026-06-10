@@ -114,6 +114,8 @@ export type {
 export {
   verifyConfigProof,
 } from "./config-proof.js";
+export { FlowNodeContextSchema } from "./flow-node-context.js";
+export type { FlowNodeContext } from "./flow-node-context.js";
 
 
 // The following functions are exported only for testing purposes, they should not be used in the production code
