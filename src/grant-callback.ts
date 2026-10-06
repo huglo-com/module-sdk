@@ -12,6 +12,8 @@ import type { GrantStore } from "./store.js";
 export interface SignedCreateInviteOptions {
   callbackUrl: string;
   scopes: InviteScopeRequest[];
+  /** Intended grant subject; included in the signed invite payload when set. */
+  subject?: string;
   constraints?: Record<string, unknown>;
 }
 
@@ -63,13 +65,23 @@ export async function createSignedInvite(
   privateKey: KeyObject,
   options: SignedCreateInviteOptions,
 ): Promise<CreateInviteResponse> {
-  const payload = {
+  const payload: {
+    moduleId: string;
+    callbackUrl: string;
+    scopes: InviteScopeRequest[];
+    subject?: string;
+    constraints: Record<string, unknown>;
+    iat: string;
+  } = {
     moduleId,
     callbackUrl: options.callbackUrl,
     scopes: options.scopes,
     constraints: options.constraints ?? {},
     iat: new Date().toISOString(),
   };
+  if (options.subject !== undefined) {
+    payload.subject = options.subject;
+  }
   const signature = signObject(payload, privateKey);
   return directory.createInvite(moduleId, { payload, signature });
 }

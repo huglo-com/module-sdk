@@ -208,6 +208,8 @@ export interface EmitterOptions<O extends z.ZodType> {
 export interface CreateInviteOptions {
   callbackUrl: string;
   scopes: InviteScopeRequest[];
+  /** Intended grant subject; included in the signed invite payload when set. */
+  subject?: string;
   constraints?: Record<string, unknown>;
 }
 

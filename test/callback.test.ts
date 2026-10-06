@@ -8,6 +8,7 @@ import {
   DEFAULT_CALLBACK_PATH,
   DEFAULT_GRANT_INIT_PATH,
   grantInitPath,
+  parseGrantInitQuery,
 } from "../src/server.js";
 import type { SignedGrant } from "../src/envelope.js";
 import type { GrantCallbackErrorContext } from "../src/grant-callback.js";
@@ -68,6 +69,7 @@ describe("grant callback route", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain("huglo:grant:authorized");
+    expect(html).toContain('"scopes"');
     expect(html).toContain("window.opener");
     expect(html).toContain("Authorization complete");
 
@@ -180,6 +182,23 @@ describe("grant callback route", () => {
 
     expect(res.status).toBe(201);
     expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it("callback notify HTML includes all authorized scopes", async () => {
+    const grants = [
+      buildGrant({ grant_id: "g-callback-001", scope: "invoice:write" }),
+      buildGrant({ grant_id: "g-callback-002", scope: "invoice:read" }),
+    ];
+    directory.setExchangeGrants("code-multi", grants);
+
+    const module = createModule();
+    const res = await module.getApp().request(`${DEFAULT_CALLBACK_PATH}?code=code-multi`);
+
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("invoice:write");
+    expect(html).toContain("invoice:read");
+    expect(html).toContain('"scopes"');
   });
 
   it("onGrantCallback returning void falls back to default success page", async () => {
@@ -326,9 +345,9 @@ describe("grant init route", () => {
     inviteUrl: "https://account.huglo.test/invite/init-test",
   };
 
-  function buildGrant(overrides: Partial<{ grant_id: string }> = {}) {
+  function buildGrant(overrides: Partial<SignedGrant["grant"]> = {}) {
     const grant = {
-      grant_id: overrides.grant_id ?? "g-init-001",
+      grant_id: "g-init-001",
       holder: "da",
       scope: "invoice:write",
       subject: "huglo:user:user-1",
@@ -337,6 +356,7 @@ describe("grant init route", () => {
       constraints: {},
       issued_at: new Date(Date.now() - 60_000).toISOString(),
       expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      ...overrides,
     };
     return { grant, signature: signObject(grant, authorKeys.privateKey) };
   }
@@ -384,6 +404,50 @@ describe("grant init route", () => {
     expect(await res.text()).toContain("Missing subject");
   });
 
+  it("parseGrantInitQuery accepts one holder with multiple scopes", () => {
+    const parsed = parseGrantInitQuery(
+      "huglo:user:user-1",
+      ["da"],
+      ["invoice:write", "invoice:read"],
+    );
+    expect(parsed).toEqual({
+      ok: true,
+      subject: "huglo:user:user-1",
+      scopeRequests: [
+        { holder: "da", scope: "invoice:write" },
+        { holder: "da", scope: "invoice:read" },
+      ],
+    });
+  });
+
+  it("parseGrantInitQuery pairs parallel holder and scope params", () => {
+    const parsed = parseGrantInitQuery(
+      "huglo:user:user-1",
+      ["da", "trovi"],
+      ["invoice:write", "files:read"],
+    );
+    expect(parsed).toEqual({
+      ok: true,
+      subject: "huglo:user:user-1",
+      scopeRequests: [
+        { holder: "da", scope: "invoice:write" },
+        { holder: "trovi", scope: "files:read" },
+      ],
+    });
+  });
+
+  it("parseGrantInitQuery rejects mismatched holder and scope counts", () => {
+    const parsed = parseGrantInitQuery(
+      "huglo:user:user-1",
+      ["da", "trovi"],
+      ["invoice:write"],
+    );
+    expect(parsed).toEqual({
+      ok: false,
+      error: "holder and scope query parameter counts must match",
+    });
+  });
+
   it("returns notify HTML when grant already exists", async () => {
     await grantStore.save(buildGrant());
     const module = createModule();
@@ -405,6 +469,7 @@ describe("grant init route", () => {
       expect(signed.payload).toMatchObject({
         moduleId: "trovi-test",
         callbackUrl: "https://trovi.example/grant/callback",
+        subject: "huglo:user:user-1",
         scopes: [{ holder: "da", scope: "invoice:write" }],
       });
       return originalCreateInvite(moduleId, signed);
@@ -418,6 +483,60 @@ describe("grant init route", () => {
     expect(res.status).toBe(302);
     expect(res.headers.get("Location")).toBe(sampleInviteResponse.inviteUrl);
     expect(capturedModuleId).toBe("trovi-test");
+  });
+
+  it("redirects with one invite for multiple missing scopes", async () => {
+    let capturedScopes: { holder: string; scope: string }[] | undefined;
+    const originalCreateInvite = directory.createInvite.bind(directory);
+    directory.createInvite = async (moduleId, signed) => {
+      capturedScopes = signed.payload.scopes;
+      expect(signed.payload.subject).toBe("huglo:user:user-1");
+      return originalCreateInvite(moduleId, signed);
+    };
+
+    const module = createModule();
+    const res = await module.getApp().request(
+      `${DEFAULT_GRANT_INIT_PATH}?subject=huglo:user:user-1&holder=da&scope=invoice:write&scope=invoice:read`,
+      { redirect: "manual" },
+    );
+    expect(res.status).toBe(302);
+    expect(capturedScopes).toEqual([
+      { holder: "da", scope: "invoice:write" },
+      { holder: "da", scope: "invoice:read" },
+    ]);
+  });
+
+  it("invites only for scopes that are still missing", async () => {
+    await grantStore.save(buildGrant());
+    let capturedScopes: { holder: string; scope: string }[] | undefined;
+    const originalCreateInvite = directory.createInvite.bind(directory);
+    directory.createInvite = async (moduleId, signed) => {
+      capturedScopes = signed.payload.scopes;
+      return originalCreateInvite(moduleId, signed);
+    };
+
+    const module = createModule();
+    const res = await module.getApp().request(
+      `${DEFAULT_GRANT_INIT_PATH}?subject=huglo:user:user-1&holder=da&scope=invoice:write&scope=invoice:read`,
+      { redirect: "manual" },
+    );
+    expect(res.status).toBe(302);
+    expect(capturedScopes).toEqual([{ holder: "da", scope: "invoice:read" }]);
+  });
+
+  it("returns notify HTML with all scopes when every grant exists", async () => {
+    await grantStore.save(buildGrant({ scope: "invoice:write" }));
+    await grantStore.save(buildGrant({ grant_id: "g-init-002", scope: "invoice:read" }));
+
+    const module = createModule();
+    const res = await module.getApp().request(
+      `${DEFAULT_GRANT_INIT_PATH}?subject=huglo:user:user-1&holder=da&scope=invoice:write&scope=invoice:read`,
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('"scopes"');
+    expect(html).toContain("invoice:write");
+    expect(html).toContain("invoice:read");
   });
 
   it("returns 503 when endpoint is missing and grant is missing", async () => {

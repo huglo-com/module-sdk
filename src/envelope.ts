@@ -199,6 +199,8 @@ export interface InvitePayload {
   moduleId: string;
   callbackUrl: string;
   scopes: InviteScopeRequest[];
+  /** Intended grant subject; Directory uses this when minting grants. */
+  subject?: string;
   constraints: Record<string, unknown>;
   iat: string;
 }
@@ -247,6 +249,7 @@ export const InvitePayloadSchema = z.object({
   moduleId: z.string(),
   callbackUrl: z.string(),
   scopes: z.array(InviteScopeRequestSchema),
+  subject: z.string().optional(),
   constraints: z.record(z.string(), z.unknown()),
   iat: z.string(),
 });
