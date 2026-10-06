@@ -433,8 +433,8 @@ function createGrantInitHandler(options: CreateServerOptions) {
   return async (c: Context) => {
     const parsed = parseGrantInitQuery(
       c.req.query("subject"),
-      c.req.queries("holder"),
-      c.req.queries("scope"),
+      c.req.queries("holder") ?? [],
+      c.req.queries("scope") ?? [],
     );
     if (!parsed.ok) {
       return c.text(parsed.error, 400);

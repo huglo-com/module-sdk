@@ -24,9 +24,10 @@ export function grantAuthorizedNotifyHtml(
     subject: params.subject,
     scopes: params.scopes,
   };
-  if (params.scopes.length === 1) {
-    payload.holder = params.scopes[0].holder;
-    payload.scope = params.scopes[0].scope;
+  const singleScope = params.scopes.at(0);
+  if (params.scopes.length === 1 && singleScope !== undefined) {
+    payload.holder = singleScope.holder;
+    payload.scope = singleScope.scope;
   }
   const payloadJson = escapeScriptJson(JSON.stringify(payload));
   const escapedMessage = escapeHtml(message);
