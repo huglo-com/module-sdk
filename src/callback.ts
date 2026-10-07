@@ -1,7 +1,11 @@
-export interface GrantAuthorizedParams {
-  subject: string;
+export interface GrantAuthorizedScope {
   holder: string;
   scope: string;
+}
+
+export interface GrantAuthorizedParams {
+  subject: string;
+  scopes: GrantAuthorizedScope[];
 }
 
 /** Notify opener and close popup after grant authorization (init or callback). */
@@ -9,14 +13,23 @@ export function grantAuthorizedNotifyHtml(
   params: GrantAuthorizedParams,
   message = "Authorization complete.",
 ): string {
-  const payloadJson = escapeScriptJson(
-    JSON.stringify({
-      type: "huglo:grant:authorized",
-      subject: params.subject,
-      holder: params.holder,
-      scope: params.scope,
-    }),
-  );
+  const payload: {
+    type: string;
+    subject: string;
+    scopes: GrantAuthorizedScope[];
+    holder?: string;
+    scope?: string;
+  } = {
+    type: "huglo:grant:authorized",
+    subject: params.subject,
+    scopes: params.scopes,
+  };
+  const singleScope = params.scopes.at(0);
+  if (params.scopes.length === 1 && singleScope !== undefined) {
+    payload.holder = singleScope.holder;
+    payload.scope = singleScope.scope;
+  }
+  const payloadJson = escapeScriptJson(JSON.stringify(payload));
   const escapedMessage = escapeHtml(message);
   return `<!DOCTYPE html>
 <html lang="en">

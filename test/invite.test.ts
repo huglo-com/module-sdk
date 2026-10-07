@@ -111,6 +111,37 @@ describe("invite flow", () => {
     ).toBe(true);
   });
 
+  it("createInvite includes subject in signed payload when provided", async () => {
+    let capturedSigned: { payload: unknown; signature: string } | undefined;
+    const spyDirectory = new InMemoryDirectoryClient();
+    spyDirectory.setInviteResponse("trovi-test", sampleInviteResponse);
+    const originalCreateInvite = spyDirectory.createInvite.bind(spyDirectory);
+    spyDirectory.createInvite = async (moduleId, signed) => {
+      capturedSigned = signed;
+      return originalCreateInvite(moduleId, signed);
+    };
+
+    const module = new Module({
+      id: "trovi-test",
+      name: "Trovi",
+      description: "Test requester",
+      version: "1.0.0",
+      keyPair: requesterKeys,
+      huglo: { directoryUrl: "http://unused" },
+      directory: spyDirectory,
+    });
+
+    await module.createInvite({
+      callbackUrl: "https://trovi.example/oauth/callback",
+      subject: "huglo:user:user-1",
+      scopes: [{ holder: "da", scope: "invoice:write" }],
+    });
+
+    expect(capturedSigned!.payload).toMatchObject({
+      subject: "huglo:user:user-1",
+    });
+  });
+
   it("createInvite defaults constraints to empty object", async () => {
     const module = createModule();
     await module.createInvite({

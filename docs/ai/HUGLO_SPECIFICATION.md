@@ -284,9 +284,9 @@ A grant is a subject's signed authorization. The directory builds, signs, stores
 Read as: **author** authorizes **requester** to use **scope** at **holder**, concerning **subject**'s data.
 
 Field rules:
-- `subject` and `author` must be `huglo:user:<id>` (bare module ids or other identifier forms are rejected).
-- `author` must equal `subject` (user self-authorization only; holders reject mismatches with `grant_author_mismatch`).
-- **Future:** delegated authorization may allow `author !== subject` when accompanied by a signed delegation proof from the subject. That is not part of the current protocol; holders reject non-user identifiers and mismatched author/subject today.
+- `subject` is the Huglo identifier for whose data the grant applies (for example `huglo:user:<id>` or another Directory-issued subject form).
+- `author` is the Huglo identifier of the party that signed Sig 1. It may equal `subject` (self-authorization) or differ when the Directory has authorized a controller relationship (for example power-of-attorney) at mint time.
+- Holders verify Sig 1 against the Directory key for `author` and do **not** re-implement Directory mint policy (such as requiring `author === subject`). Users choose a Directory and trust its mint rules.
 - `holder`, `requester` are bare module ids.
 - `constraints` is **reserved**; empty `{}` means no restriction. Holders reject any unrecognized constraint key (fail closed), so constraints should only be emitted once modules support them.
 - `issued_at` / `expires_at` are ISO 8601.
@@ -307,6 +307,7 @@ Content-Type: application/json
     "scopes": [
       { "holder": "trovi", "scope": "invoices:write" }
     ],
+    "subject": "huglo:user:abc123",
     "constraints": {},
     "iat": "2026-05-29T22:00:00.000Z"
   },
@@ -338,7 +339,22 @@ Response `200`:
 The directory verifies:
 - `signature` over `JCS(payload)` using the requester module's public key from the directory.
 - `payload.moduleId` matches the path `{moduleId}`.
+- When `payload.subject` is present, the Directory uses it as the intended grant subject at mint time.
 - An `inviteUrl` is returned for the subject to open in a browser and approve.
+
+#### 7.2.1 Module SDK `/grant/init` helper
+
+When a module configures a `grantStore`, the SDK exposes `GET /grant/init` (derived from the callback path when customized). Query parameters:
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `subject` | Yes | Intended grant subject passed through to the signed invite payload. |
+| `holder` | Yes | Holder module id. Repeat when pairing with multiple `scope` values at different holders. |
+| `scope` | Yes | Scope name. Repeat to request multiple scopes in one invite. |
+
+When a single `holder` is provided with multiple `scope` values, all scopes apply to that holder. When multiple `holder` and `scope` values are provided, their counts must match and are paired in order.
+
+The handler checks the grant store for each requested scope. If every scope is already authorized, it returns the grant-authorized notify HTML (see §7.3). Otherwise it creates **one** signed invite containing the missing scopes and redirects the browser to the Directory `inviteUrl`.
 
 ### 7.3 Issuance flow (subject approves)
 
@@ -531,7 +547,7 @@ Modules may register grant-free scopes with `"open": true` in the manifest. Open
 
 Modules verify inbound calls, sign outbound calls, and verify signed responses. The directory supplies keys, endpoints, grants, and revocations.
 
-- Holder verification on `POST /invoke/:scope` — **protected scopes:** parse envelope → timestamp (±5 min) → nonce replay → Sig 2 (requester) → author/subject binding → Sig 1 (grant) → grant validity window → binding checks (holder/scope/requester) → constraints (fail closed) → revocation → input schema. **Open scopes:** parse open envelope → timestamp → nonce → Sig 2 → scope binding → input schema (see §9).
+- Holder verification on `POST /invoke/:scope` — **protected scopes:** parse envelope → timestamp (±5 min) → nonce replay → Sig 2 (requester) → Sig 1 (grant author) → grant validity window → binding checks (holder/scope/requester) → constraints (fail closed) → revocation → input schema. **Open scopes:** parse open envelope → timestamp → nonce → Sig 2 → scope binding → input schema (see §9).
 - Requester calls build the envelope, sign Sig 2, verify the holder's Sig 3, and match `requestId`.
 - Invite and grant exchange calls use the directory endpoints in §7.
 - Responses, including errors, are signed by the holder module.

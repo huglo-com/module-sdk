@@ -5,7 +5,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import type { KeyObject } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import type { DirectoryClient } from "./directory.js";
-import type { InvokeResponse, SignedGrant } from "./envelope.js";
+import type { InviteScopeRequest, InvokeResponse, SignedGrant } from "./envelope.js";
 import { sig3Payload , isGrantInvokeBody } from "./envelope.js";
 import { normalizeError, ModuleError } from "./errors.js";
 import { signObject } from "./signing.js";
@@ -376,11 +376,14 @@ function createGrantCallbackHandler(options: CreateServerOptions) {
 
     const first = grants[0]?.grant;
     if (first) {
+      const scopes = grants.map((g) => ({
+        holder: g.grant.holder,
+        scope: g.grant.scope,
+      }));
       return c.html(
         grantAuthorizedNotifyHtml({
           subject: first.subject,
-          holder: first.holder,
-          scope: first.scope,
+          scopes,
         }),
       );
     }
@@ -391,31 +394,74 @@ function createGrantCallbackHandler(options: CreateServerOptions) {
   };
 }
 
+type GrantInitQuery =
+  | { ok: true; subject: string; scopeRequests: InviteScopeRequest[] }
+  | { ok: false; error: string };
+
+/** Parse `/grant/init` query params into subject + scope requests. */
+export function parseGrantInitQuery(
+  subject: string | undefined,
+  holders: string[],
+  scopes: string[],
+): GrantInitQuery {
+  if (!subject) {
+    return { ok: false, error: "Missing subject query parameter" };
+  }
+  if (holders.length === 0 || scopes.length === 0) {
+    return { ok: false, error: "Missing holder or scope query parameter" };
+  }
+
+  let scopeRequests: InviteScopeRequest[];
+  if (holders.length === 1) {
+    scopeRequests = scopes.map((scope) => ({ holder: holders[0]!, scope }));
+  } else if (holders.length === scopes.length) {
+    scopeRequests = holders.map((holder, index) => ({
+      holder,
+      scope: scopes[index]!,
+    }));
+  } else {
+    return {
+      ok: false,
+      error: "holder and scope query parameter counts must match",
+    };
+  }
+
+  return { ok: true, subject, scopeRequests };
+}
+
 function createGrantInitHandler(options: CreateServerOptions) {
   return async (c: Context) => {
-    const subject = c.req.query("subject");
-    const holder = c.req.query("holder");
-    const scope = c.req.query("scope");
-
-    if (!subject || !holder || !scope) {
-      return c.text("Missing subject, holder, or scope query parameter", 400);
+    const parsed = parseGrantInitQuery(
+      c.req.query("subject"),
+      c.req.queries("holder") ?? [],
+      c.req.queries("scope") ?? [],
+    );
+    if (!parsed.ok) {
+      return c.text(parsed.error, 400);
     }
 
+    const { subject, scopeRequests } = parsed;
     const grantStore = options.grantStore;
     if (!grantStore) {
       return c.text("Grant store not configured", 503);
     }
 
-    const existing = await grantStore.find({
-      subject,
-      holder,
-      scope,
-      requester: options.moduleId,
-    });
+    const missingScopes: InviteScopeRequest[] = [];
+    for (const scopeRequest of scopeRequests) {
+      const existing = await grantStore.find({
+        subject,
+        holder: scopeRequest.holder,
+        scope: scopeRequest.scope,
+        requester: options.moduleId,
+      });
+      if (!existing) {
+        missingScopes.push(scopeRequest);
+      }
+    }
 
-    if (existing) {
+    if (missingScopes.length === 0) {
       return c.html(
-        grantAuthorizedNotifyHtml({ subject, holder, scope }),
+        grantAuthorizedNotifyHtml({ subject, scopes: scopeRequests }),
       );
     }
 
@@ -434,7 +480,8 @@ function createGrantInitHandler(options: CreateServerOptions) {
         options.privateKey,
         {
           callbackUrl,
-          scopes: [{ holder, scope }],
+          subject,
+          scopes: missingScopes,
         },
       );
       return c.redirect(inviteUrl);
