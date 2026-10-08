@@ -203,6 +203,8 @@ export interface InvitePayload {
   subject?: string;
   constraints: Record<string, unknown>;
   iat: string;
+  /** Single-use replay protection; must be covered by the module signature. */
+  nonce: string;
 }
 
 export interface SignedInvitePayload {
@@ -252,6 +254,7 @@ export const InvitePayloadSchema = z.object({
   subject: z.string().optional(),
   constraints: z.record(z.string(), z.unknown()),
   iat: z.string(),
+  nonce: z.string(),
 });
 
 export const SignedInvitePayloadSchema = z.object({

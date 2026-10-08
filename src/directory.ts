@@ -12,6 +12,24 @@ import {
 } from "./envelope.js";
 import type { z } from "zod";
 
+async function directoryErrorMessage(response: Response): Promise<string> {
+  const base = `Directory returned ${response.status}`;
+  try {
+    const text = await response.text();
+    try {
+      const body = JSON.parse(text) as { error?: unknown };
+      if (typeof body.error === "string" && body.error.length > 0) {
+        return `${base} (${body.error})`;
+      }
+    } catch {
+      // non-JSON error body
+    }
+  } catch {
+    // unable to read body
+  }
+  return base;
+}
+
 export interface DirectoryClient {
   /** Fetch a module's Ed25519 public key (cached). */
   getModuleKey(moduleId: string, keyId?: string): Promise<KeyObject>;
@@ -226,10 +244,7 @@ export class HttpDirectoryClient implements DirectoryClient {
       );
     }
     if (!response.ok) {
-      throw infraError(
-        "directory_error",
-        `Directory returned ${response.status}`,
-      );
+      throw infraError("directory_error", await directoryErrorMessage(response));
     }
     let json: unknown;
     try {

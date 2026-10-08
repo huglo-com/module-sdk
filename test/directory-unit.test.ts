@@ -108,6 +108,7 @@ describe("directory unit", () => {
           scopes: [{ holder: "da", scope: "invoice:write" }],
           constraints: {},
           iat: "2026-01-01T00:00:00.000Z",
+          nonce: "00000000-0000-4000-8000-000000000001",
         },
         signature: `ed25519:${keys.publicKeyBase64}`,
       };
