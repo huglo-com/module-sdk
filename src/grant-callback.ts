@@ -1,4 +1,5 @@
 import type { Context, MiddlewareHandler } from "hono";
+import { randomUUID } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import type { DirectoryClient } from "./directory.js";
 import type {
@@ -72,12 +73,14 @@ export async function createSignedInvite(
     subject?: string;
     constraints: Record<string, unknown>;
     iat: string;
+    nonce: string;
   } = {
     moduleId,
     callbackUrl: options.callbackUrl,
     scopes: options.scopes,
     constraints: options.constraints ?? {},
     iat: new Date().toISOString(),
+    nonce: randomUUID(),
   };
   if (options.subject !== undefined) {
     payload.subject = options.subject;

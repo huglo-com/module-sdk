@@ -309,7 +309,8 @@ Content-Type: application/json
     ],
     "subject": "huglo:user:abc123",
     "constraints": {},
-    "iat": "2026-05-29T22:00:00.000Z"
+    "iat": "2026-05-29T22:00:00.000Z",
+    "nonce": "550e8400-e29b-41d4-a716-446655440000"
   },
   "signature": "ed25519:<base64 over JCS(payload)>"
 }

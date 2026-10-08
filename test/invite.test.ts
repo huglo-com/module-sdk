@@ -3,6 +3,7 @@ import { generateKeyPair } from "../src/keys.js";
 import { signObject, verifyObject } from "../src/signing.js";
 import { HttpDirectoryClient, InMemoryDirectoryClient } from "../src/directory.js";
 import { Module } from "../src/module.js";
+import { createSignedInvite } from "../src/grant-callback.js";
 import type { CreateInviteResponse, SignedGrant } from "../src/envelope.js";
 
 describe("invite flow", () => {
@@ -109,6 +110,70 @@ describe("invite flow", () => {
         requesterKeys.publicKey,
       ),
     ).toBe(true);
+    const payload = capturedSigned!.payload as { nonce: string };
+    expect(payload.nonce).toBeTruthy();
+    expect(typeof payload.nonce).toBe("string");
+  });
+
+  it("createInvite generates a distinct nonce per call", async () => {
+    const capturedNonces: string[] = [];
+    const spyDirectory = new InMemoryDirectoryClient();
+    spyDirectory.setInviteResponse("trovi-test", sampleInviteResponse);
+    const originalCreateInvite = spyDirectory.createInvite.bind(spyDirectory);
+    spyDirectory.createInvite = async (moduleId, signed) => {
+      capturedNonces.push((signed.payload as { nonce: string }).nonce);
+      return originalCreateInvite(moduleId, signed);
+    };
+
+    const module = new Module({
+      id: "trovi-test",
+      name: "Trovi",
+      description: "Test requester",
+      version: "1.0.0",
+      keyPair: requesterKeys,
+      huglo: { directoryUrl: "http://unused" },
+      directory: spyDirectory,
+    });
+
+    const inviteOptions = {
+      callbackUrl: "https://trovi.example/oauth/callback",
+      scopes: [{ holder: "da", scope: "invoice:write" }],
+    };
+    await module.createInvite(inviteOptions);
+    await module.createInvite(inviteOptions);
+
+    expect(capturedNonces).toHaveLength(2);
+    expect(capturedNonces[0]).toBeTruthy();
+    expect(capturedNonces[1]).toBeTruthy();
+    expect(capturedNonces[0]).not.toBe(capturedNonces[1]);
+  });
+
+  it("createInvite signature fails verification when nonce is altered", async () => {
+    let capturedSigned: { payload: unknown; signature: string } | undefined;
+    const directory = new InMemoryDirectoryClient();
+    directory.setInviteResponse("trovi-test", sampleInviteResponse);
+    const originalCreateInvite = directory.createInvite.bind(directory);
+    directory.createInvite = async (moduleId, signed) => {
+      capturedSigned = signed;
+      return originalCreateInvite(moduleId, signed);
+    };
+
+    await createSignedInvite(directory, "trovi-test", requesterKeys.privateKey, {
+      callbackUrl: "https://trovi.example/oauth/callback",
+      scopes: [{ holder: "da", scope: "invoice:write" }],
+    });
+
+    expect(capturedSigned).toBeDefined();
+    const tampered = {
+      ...(capturedSigned!.payload as Record<string, unknown>),
+      nonce: "tampered-nonce",
+    };
+    expect(
+      verifyObject(tampered, capturedSigned!.signature, requesterKeys.publicKey),
+    ).toBe(false);
+    expect(
+      verifyObject(capturedSigned!.payload, capturedSigned!.signature, requesterKeys.publicKey),
+    ).toBe(true);
   });
 
   it("createInvite includes subject in signed payload when provided", async () => {
@@ -196,6 +261,7 @@ describe("HttpDirectoryClient invite endpoints", () => {
         scopes: [{ holder: "da", scope: "invoice:write" }],
         constraints: {},
         iat: "2026-05-29T22:00:00.000Z",
+        nonce: "00000000-0000-4000-8000-000000000001",
       },
       signature: "ed25519:abc123",
     };
@@ -276,6 +342,32 @@ describe("HttpDirectoryClient invite endpoints", () => {
     expect(capturedInit?.method).toBe("POST");
     expect(JSON.parse(String(capturedInit?.body))).toEqual({ code: "code-456" });
     expect(result).toEqual([grant]);
+  });
+
+  it("createInvite includes directory error code in message on non-2xx JSON body", async () => {
+    const fetchFn = async () =>
+      new Response(
+        JSON.stringify({ error: "invalid_request", message: "nonce is required" }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+
+    const client = new HttpDirectoryClient({ directoryUrl: baseUrl, fetch: fetchFn });
+    const signed = {
+      payload: {
+        moduleId: "trovi-test",
+        callbackUrl: "https://trovi.example/oauth/callback",
+        scopes: [{ holder: "da", scope: "invoice:write" }],
+        constraints: {},
+        iat: "2026-05-29T22:00:00.000Z",
+        nonce: "00000000-0000-4000-8000-000000000001",
+      },
+      signature: "ed25519:abc123",
+    };
+
+    await expect(client.createInvite("trovi-test", signed)).rejects.toMatchObject({
+      code: "directory_error",
+      message: "Directory returned 400 (invalid_request)",
+    });
   });
 
   it("throws infraError on malformed exchange response", async () => {
