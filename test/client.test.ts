@@ -19,7 +19,7 @@ describe("client", () => {
     holderKeys.publicKey,
     holderKeys.publicKeyBase64,
   );
-  directory.registerUser("user-1", authorKeys.publicKey);
+  directory.registerUser("huglo:user:user-1", authorKeys.publicKey);
 
   function buildGrant(overrides: Partial<SignedGrant["grant"]> = {}): SignedGrant {
     const grant = {

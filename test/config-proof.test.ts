@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { generateKeyPair } from "../src/keys.js";
 import { signObject } from "../src/signing.js";
-import { InMemoryDirectoryClient } from "../src/directory.js";
+import { HttpDirectoryClient, InMemoryDirectoryClient } from "../src/directory.js";
 import {
   verifyConfigProof,
   CONFIG_PROOF_PURPOSE,
@@ -19,7 +19,7 @@ describe("config-proof", () => {
   beforeEach(() => {
     directory.clear();
     nonceCache.clear();
-    directory.registerUser("alice", userKeys.publicKey);
+    directory.registerUser("huglo:user:alice", userKeys.publicKey);
   });
 
   function verifyOpts(overrides: { now?: number } = {}) {
@@ -119,6 +119,142 @@ describe("config-proof", () => {
   it("rejects malformed proof", async () => {
     await expect(verifyConfigProof(null, verifyOpts())).rejects.toMatchObject({
       code: "invalid_config_proof",
+    });
+  });
+
+  it("verifyConfigProof accepts an agent subject registered on the subject key map", async () => {
+    const agentKeys = generateKeyPair();
+    directory.registerSubject("huglo:agent:agt_1", agentKeys.publicKey);
+    const proof = createSignedConfigProof({
+      subject: "huglo:agent:agt_1",
+      audience: moduleId,
+      privateKey: agentKeys.privateKey,
+    });
+    await expect(verifyConfigProof(proof, verifyOpts())).resolves.toBe("huglo:agent:agt_1");
+  });
+
+  it("does not verify an agent-subject proof against a user key with the same id suffix", async () => {
+    const agentKeys = generateKeyPair();
+    const proof = createSignedConfigProof({
+      subject: "huglo:agent:alice",
+      audience: moduleId,
+      privateKey: userKeys.privateKey,
+    });
+    directory.registerSubject("huglo:agent:alice", agentKeys.publicKey);
+    await expect(verifyConfigProof(proof, verifyOpts())).rejects.toMatchObject({
+      code: "config_proof_invalid_signature",
+    });
+  });
+});
+
+describe("config-proof HttpDirectoryClient lookup", () => {
+  const moduleId = "acme-module";
+  const userKeys = generateKeyPair();
+  const agentKeys = generateKeyPair();
+  const otherKeys = generateKeyPair();
+
+  function httpVerify(
+    fetchFn: typeof fetch,
+    proof: ReturnType<typeof createSignedConfigProof>,
+  ) {
+    const directory = new HttpDirectoryClient({
+      directoryUrl: "https://directory.example",
+      fetch: fetchFn,
+    });
+    return verifyConfigProof(proof, {
+      moduleId,
+      directory,
+      nonceCache: new NonceCache(),
+    });
+  }
+
+  it("looks up user subjects on the subjects endpoint and verifies", async () => {
+    const subject = "huglo:user:alice";
+    const proof = createSignedConfigProof({
+      subject,
+      audience: moduleId,
+      privateKey: userKeys.privateKey,
+    });
+    const fetchFn = vi.fn().mockResolvedValue(
+      Response.json({ subject, publicKey: userKeys.publicKeyBase64 }),
+    );
+
+    await expect(httpVerify(fetchFn, proof)).resolves.toBe(subject);
+    expect(String(fetchFn.mock.calls[0]?.[0])).toBe(
+      `https://directory.example/directory/subjects/${encodeURIComponent(subject)}/key`,
+    );
+  });
+
+  it("looks up agent and project subjects on the subjects endpoint", async () => {
+    const agentSubject = "huglo:agent:agt_1";
+    const projectSubject = "huglo:proj1:entity-1";
+    const fetchFn = vi.fn().mockImplementation(async (url: string | URL | Request) => {
+      const path = String(url);
+      if (path.includes(encodeURIComponent(agentSubject))) {
+        return Response.json({ subject: agentSubject, publicKey: agentKeys.publicKeyBase64 });
+      }
+      if (path.includes(encodeURIComponent(projectSubject))) {
+        return Response.json({ subject: projectSubject, publicKey: agentKeys.publicKeyBase64 });
+      }
+      return new Response(null, { status: 404 });
+    });
+
+    await expect(
+      httpVerify(
+        fetchFn,
+        createSignedConfigProof({
+          subject: agentSubject,
+          audience: moduleId,
+          privateKey: agentKeys.privateKey,
+        }),
+      ),
+    ).resolves.toBe(agentSubject);
+
+    await expect(
+      httpVerify(
+        fetchFn,
+        createSignedConfigProof({
+          subject: projectSubject,
+          audience: moduleId,
+          privateKey: agentKeys.privateKey,
+        }),
+      ),
+    ).resolves.toBe(projectSubject);
+
+    const requested = fetchFn.mock.calls.map((call) => String(call[0]));
+    expect(requested).toEqual([
+      `https://directory.example/directory/subjects/${encodeURIComponent(agentSubject)}/key`,
+      `https://directory.example/directory/subjects/${encodeURIComponent(projectSubject)}/key`,
+    ]);
+    expect(requested.some((url) => url.includes("/directory/users/"))).toBe(false);
+  });
+
+  it("fails closed when the subject key is missing", async () => {
+    const proof = createSignedConfigProof({
+      subject: "huglo:agent:agt_missing",
+      audience: moduleId,
+      privateKey: agentKeys.privateKey,
+    });
+    const fetchFn = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    await expect(httpVerify(fetchFn, proof)).rejects.toMatchObject({
+      code: "config_proof_user_not_found",
+    });
+  });
+
+  it("fails closed when the directory returns another principal's key", async () => {
+    const proof = createSignedConfigProof({
+      subject: "huglo:agent:agt_1",
+      audience: moduleId,
+      privateKey: otherKeys.privateKey,
+    });
+    const fetchFn = vi.fn().mockResolvedValue(
+      Response.json({
+        subject: "huglo:user:alice",
+        publicKey: otherKeys.publicKeyBase64,
+      }),
+    );
+    await expect(httpVerify(fetchFn, proof)).rejects.toMatchObject({
+      code: "config_proof_user_not_found",
     });
   });
 });

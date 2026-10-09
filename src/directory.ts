@@ -30,11 +30,37 @@ async function directoryErrorMessage(response: Response): Promise<string> {
   return base;
 }
 
+function subjectKeyUrl(baseUrl: string, subject: string): string {
+  return `${baseUrl}/directory/subjects/${encodeURIComponent(subject)}/key`;
+}
+
+function readSubjectKeyPublicKey(body: unknown, requestedSubject: string): string {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw infraError("invalid_response", "Directory subject key response is malformed");
+  }
+  const subject = "subject" in body ? body.subject : undefined;
+  const publicKey = "publicKey" in body ? body.publicKey : undefined;
+  if (typeof publicKey !== "string" || publicKey.length === 0) {
+    throw infraError("invalid_response", "Directory subject key response is malformed");
+  }
+  if (typeof subject !== "string" || subject !== requestedSubject) {
+    throw infraError(
+      "invalid_response",
+      "Directory subject key does not match requested subject",
+    );
+  }
+  return publicKey;
+}
+
 export interface DirectoryClient {
   /** Fetch a module's Ed25519 public key (cached). */
   getModuleKey(moduleId: string, keyId?: string): Promise<KeyObject>;
-  /** Fetch a user's Ed25519 public key (cached). userId is the bare id without prefix. */
-  getUserKey(userId: string, keyId?: string): Promise<KeyObject>;
+  /**
+   * Fetch the Ed25519 public key registered for a Huglo subject (cached).
+   * `subject` is the full identifier (`huglo:user:<id>`, `huglo:agent:<id>`, …).
+   * Lookup is `GET /directory/subjects/{encodeURIComponent(subject)}/key`.
+   */
+  getSubjectKey(subject: string): Promise<KeyObject>;
   /** Fetch a module's base endpoint URL (cached). */
   getEndpoint(moduleId: string): Promise<string>;
   /** Check whether a grant_id is on the revocation list. */
@@ -69,11 +95,6 @@ interface ModuleDirectoryEntry {
   publicKey: string;
 }
 
-interface UserKeyEntry {
-  userId: string;
-  publicKey: string;
-}
-
 interface RevocationList {
   grantIds: string[];
 }
@@ -89,7 +110,7 @@ export class HttpDirectoryClient implements DirectoryClient {
   private readonly fetchFn: typeof globalThis.fetch;
 
   private readonly moduleKeyCache = new Map<string, CacheEntry<KeyObject>>();
-  private readonly userKeyCache = new Map<string, CacheEntry<KeyObject>>();
+  private readonly subjectKeyCache = new Map<string, CacheEntry<KeyObject>>();
   private readonly endpointCache = new Map<string, CacheEntry<string>>();
   private revocationSet: Set<string> = new Set();
   private revocationLastFetch = 0;
@@ -119,21 +140,19 @@ export class HttpDirectoryClient implements DirectoryClient {
     return key;
   }
 
-  async getUserKey(userId: string, keyId?: string): Promise<KeyObject> {
-    const bareId = userId.startsWith("huglo:user:")
-      ? userId.slice("huglo:user:".length)
-      : userId;
-    const cacheKey = keyId ? `${bareId}:${keyId}` : bareId;
-    const cached = this.getCached(this.userKeyCache, cacheKey);
+  /**
+   * Fetch the public key bound to `subject` from the directory subject-key registry.
+   * The request path encodes the full subject; `huglo:agent:` is never rewritten as a user id.
+   */
+  async getSubjectKey(subject: string): Promise<KeyObject> {
+    const cached = this.getCached(this.subjectKeyCache, subject);
     if (cached) return cached;
 
-    const url = keyId
-      ? `${this.baseUrl}/directory/users/${encodeURIComponent(bareId)}/keys/${encodeURIComponent(keyId)}`
-      : `${this.baseUrl}/directory/users/${encodeURIComponent(bareId)}/key`;
-
-    const entry = await this.fetchJson<UserKeyEntry>(url);
-    const key = importPublicKeyBase64(entry.publicKey);
-    this.setCached(this.userKeyCache, cacheKey, key);
+    const url = subjectKeyUrl(this.baseUrl, subject);
+    const body: unknown = await this.fetchJson<unknown>(url);
+    const publicKey = readSubjectKeyPublicKey(body, subject);
+    const key = importPublicKeyBase64(publicKey);
+    this.setCached(this.subjectKeyCache, subject, key);
     return key;
   }
 
@@ -266,7 +285,7 @@ export class InMemoryDirectoryClient implements DirectoryClient {
     string,
     { endpoint: string; publicKey: KeyObject; publicKeyBase64: string }
   >();
-  private readonly users = new Map<string, KeyObject>();
+  private readonly subjects = new Map<string, KeyObject>();
   private readonly revoked = new Set<string>();
   private readonly inviteResponses = new Map<string, CreateInviteResponse>();
   private readonly exchangeGrantsByCode = new Map<string, SignedGrant[]>();
@@ -280,11 +299,14 @@ export class InMemoryDirectoryClient implements DirectoryClient {
     this.modules.set(moduleId, { endpoint, publicKey, publicKeyBase64 });
   }
 
-  registerUser(userId: string, publicKey: KeyObject): void {
-    const bareId = userId.startsWith("huglo:user:")
-      ? userId.slice("huglo:user:".length)
-      : userId;
-    this.users.set(bareId, publicKey);
+  /** Register a `huglo:user:<id>` subject key (test helper). */
+  registerUser(subject: string, publicKey: KeyObject): void {
+    this.subjects.set(subject, publicKey);
+  }
+
+  /** Register a Huglo subject key (`huglo:agent:<id>`, claimed namespaces, …). */
+  registerSubject(subject: string, publicKey: KeyObject): void {
+    this.subjects.set(subject, publicKey);
   }
 
   revokeGrant(grantId: string): void {
@@ -304,7 +326,7 @@ export class InMemoryDirectoryClient implements DirectoryClient {
   /** Clear all registered modules, users, and revocations (for tests). */
   clear(): void {
     this.modules.clear();
-    this.users.clear();
+    this.subjects.clear();
     this.revoked.clear();
     this.inviteResponses.clear();
     this.exchangeGrantsByCode.clear();
@@ -318,13 +340,10 @@ export class InMemoryDirectoryClient implements DirectoryClient {
     return entry.publicKey;
   }
 
-  async getUserKey(userId: string, _keyId?: string): Promise<KeyObject> {
-    const bareId = userId.startsWith("huglo:user:")
-      ? userId.slice("huglo:user:".length)
-      : userId;
-    const key = this.users.get(bareId);
+  async getSubjectKey(subject: string): Promise<KeyObject> {
+    const key = this.subjects.get(subject);
     if (!key) {
-      throw infraError("user_not_found", `User ${userId} not in directory`);
+      throw infraError("subject_not_found", `Subject ${subject} not in directory`);
     }
     return key;
   }

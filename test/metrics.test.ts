@@ -19,7 +19,7 @@ function createMetricsTestEnv(options?: { metrics?: boolean }) {
 
   directory.registerModule("metrics-holder", holderEndpoint, holderKeys.publicKey, holderKeys.publicKeyBase64);
   directory.registerModule("metrics-requester", requesterEndpoint, requesterKeys.publicKey, requesterKeys.publicKeyBase64);
-  directory.registerUser("user-metrics", authorKeys.publicKey);
+  directory.registerUser("huglo:user:user-metrics", authorKeys.publicKey);
 
   const holder = new Module({
     id: "metrics-holder",

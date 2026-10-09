@@ -389,7 +389,7 @@ describe("config", () => {
     });
 
     beforeAll(async () => {
-      directory.registerUser("config-user", proofUserKeys.publicKey);
+      directory.registerUser("huglo:user:config-user", proofUserKeys.publicKey);
       directory.registerModule(
         "config-module",
         `http://127.0.0.1:${port}`,
@@ -808,7 +808,7 @@ describe("config", () => {
     });
 
     beforeAll(async () => {
-      directory.registerUser("hook-user", hookProofKeys.publicKey);
+      directory.registerUser("huglo:user:hook-user", hookProofKeys.publicKey);
       directory.registerModule("hook-module", `http://127.0.0.1:${port}`, keys.publicKey, keys.publicKeyBase64);
       await hookMod.listen(port, "127.0.0.1");
     });
@@ -1299,7 +1299,7 @@ describe("config", () => {
         requesterKeys.publicKey,
         requesterKeys.publicKeyBase64,
       );
-      directory.registerUser("invoke-user", authorKeys.publicKey);
+      directory.registerUser("huglo:user:invoke-user", authorKeys.publicKey);
       await invokeMod.listen(port, "127.0.0.1");
     });
 

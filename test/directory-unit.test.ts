@@ -19,11 +19,29 @@ describe("directory unit", () => {
       });
     });
 
-    it("getUserKey throws user_not_found", async () => {
+    it("getSubjectKey throws subject_not_found for missing user subject", async () => {
       const directory = new InMemoryDirectoryClient();
-      await expect(directory.getUserKey("huglo:user:missing")).rejects.toMatchObject({
-        code: "user_not_found",
+      await expect(directory.getSubjectKey("huglo:user:missing")).rejects.toMatchObject({
+        code: "subject_not_found",
       });
+    });
+
+    it("getSubjectKey throws subject_not_found", async () => {
+      const directory = new InMemoryDirectoryClient();
+      await expect(directory.getSubjectKey("huglo:agent:missing")).rejects.toMatchObject({
+        code: "subject_not_found",
+      });
+    });
+
+    it("resolves user and agent subjects independently", async () => {
+      const userKeys = generateKeyPair();
+      const agentKeys = generateKeyPair();
+      const directory = new InMemoryDirectoryClient();
+      directory.registerUser("huglo:user:agt_1", userKeys.publicKey);
+      directory.registerSubject("huglo:agent:agt_1", agentKeys.publicKey);
+
+      await expect(directory.getSubjectKey("huglo:agent:agt_1")).resolves.toBe(agentKeys.publicKey);
+      await expect(directory.getSubjectKey("huglo:user:agt_1")).resolves.toBe(userKeys.publicKey);
     });
 
     it("createInvite throws invite_not_configured", async () => {
@@ -40,18 +58,67 @@ describe("directory unit", () => {
       });
     });
 
-    it("registerUser strips huglo:user: prefix", async () => {
+    it("registerUser stores the full huglo:user subject", async () => {
       const keys = generateKeyPair();
       const directory = new InMemoryDirectoryClient();
       directory.registerUser("huglo:user:bare-id", keys.publicKey);
 
-      await expect(directory.getUserKey("bare-id")).resolves.toBeDefined();
-      await expect(directory.getUserKey("huglo:user:bare-id")).resolves.toBeDefined();
+      await expect(directory.getSubjectKey("huglo:user:bare-id")).resolves.toBe(keys.publicKey);
     });
   });
 
   describe("HttpDirectoryClient", () => {
     const keys = generateKeyPair();
+
+    it("getSubjectKey fetches GET /directory/subjects/{encoded-subject}/key", async () => {
+      const subject = "huglo:agent:agt_1";
+      const fetchFn = vi.fn().mockResolvedValue(
+        Response.json(
+          { subject, publicKey: keys.publicKeyBase64 },
+          { status: 200 },
+        ),
+      );
+      const client = new HttpDirectoryClient({
+        directoryUrl: "https://directory.example",
+        fetch: fetchFn,
+      });
+
+      await client.getSubjectKey(subject);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(String(fetchFn.mock.calls[0]?.[0])).toBe(
+        `https://directory.example/directory/subjects/${encodeURIComponent(subject)}/key`,
+      );
+    });
+
+    it("getSubjectKey fails closed when the directory binds a different subject", async () => {
+      const fetchFn = vi.fn().mockResolvedValue(
+        Response.json(
+          { subject: "huglo:user:alice", publicKey: keys.publicKeyBase64 },
+          { status: 200 },
+        ),
+      );
+      const client = new HttpDirectoryClient({
+        directoryUrl: "https://directory.example",
+        fetch: fetchFn,
+      });
+
+      await expect(client.getSubjectKey("huglo:agent:agt_1")).rejects.toMatchObject({
+        code: "invalid_response",
+        message: "Directory subject key does not match requested subject",
+      });
+    });
+
+    it("getSubjectKey fails closed on 404", async () => {
+      const fetchFn = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+      const client = new HttpDirectoryClient({
+        directoryUrl: "https://directory.example",
+        fetch: fetchFn,
+      });
+
+      await expect(client.getSubjectKey("huglo:agent:agt_1")).rejects.toMatchObject({
+        code: "directory_error",
+      });
+    });
 
     it("caches module key across repeated getModuleKey calls", async () => {
       const fetchFn = vi.fn().mockResolvedValue(
@@ -117,7 +184,8 @@ describe("directory unit", () => {
 
       const directoryCalls: [string, DirectoryCall][] = [
         ["getModuleKey", (c) => c.getModuleKey("mod-1")],
-        ["getUserKey", (c) => c.getUserKey("user-1")],
+        ["getSubjectKey", (c) => c.getSubjectKey("huglo:user:user-1")],
+        ["getSubjectKey (agent)", (c) => c.getSubjectKey("huglo:agent:agt_1")],
         ["getEndpoint", (c) => c.getEndpoint("mod-1")],
         ["isRevoked", (c) => c.isRevoked("g-1")],
         ["createInvite", (c) => c.createInvite("mod-1", signedInvite)],

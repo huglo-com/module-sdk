@@ -31,7 +31,7 @@ describe("verify", () => {
       requesterKeys.publicKey,
       requesterKeys.publicKeyBase64,
     );
-    directory.registerUser("user-abc", authorKeys.publicKey);
+    directory.registerUser("huglo:user:user-abc", authorKeys.publicKey);
   });
 
   function buildGrant(overrides: Partial<SignedGrant["grant"]> = {}): SignedGrant {
@@ -168,7 +168,7 @@ describe("verify", () => {
   });
 
   it("accepts grant when author does not match subject", async () => {
-    directory.registerUser("user-other", authorKeys.publicKey);
+    directory.registerUser("huglo:user:user-other", authorKeys.publicKey);
     const grant = buildGrant({
       subject: "huglo:user:user-abc",
       author: "huglo:user:user-other",
@@ -282,7 +282,7 @@ describe("verify", () => {
         holderKeys.publicKey,
         holderKeys.publicKeyBase64,
       );
-      directory.registerUser("user-abc", authorKeys.publicKey);
+      directory.registerUser("huglo:user:user-abc", authorKeys.publicKey);
 
       const grant = buildGrant();
       const req = buildRequest(grant, { amount: 1, vendor: "x" });
@@ -298,7 +298,7 @@ describe("verify", () => {
     });
 
     it("rejects when author key is not in directory", async () => {
-      directory.registerUser("user-abc", authorKeys.publicKey);
+      directory.registerUser("huglo:user:user-abc", authorKeys.publicKey);
       directory.clear();
       directory.registerModule(
         "trovi",
@@ -323,7 +323,52 @@ describe("verify", () => {
           inputSchema,
           directory,
         }),
-      ).rejects.toMatchObject({ code: "user_not_found" });
+      ).rejects.toMatchObject({ code: "subject_not_found" });
+    });
+
+    it("rejects grant author that is not a huglo:user subject", async () => {
+      const agentKeys = generateKeyPair();
+      directory.registerSubject("huglo:agent:agt-author", agentKeys.publicKey);
+
+      const grantBody = {
+        grant_id: "g-agent-author",
+        holder: "trovi",
+        scope: "invoices:write",
+        subject: "huglo:user:user-abc",
+        requester: "foaf",
+        author: "huglo:agent:agt-author",
+        constraints: {},
+        issued_at: new Date(Date.now() - 60_000).toISOString(),
+        expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      };
+      const grant: SignedGrant = {
+        grant: grantBody,
+        signature: signObject(grantBody, agentKeys.privateKey),
+      };
+      const req = buildRequest(grant, { amount: 1, vendor: "x" });
+
+      await expect(
+        verifyInvokeRequest(req, nonceCache, {
+          moduleId: "trovi",
+          urlScope: "invoices:write",
+          inputSchema,
+          directory,
+        }),
+      ).rejects.toMatchObject({ code: "invalid_grant_author" });
+    });
+
+    it("rejects bare or malformed grant author before directory lookup", async () => {
+      const grant = buildGrant({ author: "user-abc" });
+      const req = buildRequest(grant, { amount: 1, vendor: "x" });
+
+      await expect(
+        verifyInvokeRequest(req, nonceCache, {
+          moduleId: "trovi",
+          urlScope: "invoices:write",
+          inputSchema,
+          directory,
+        }),
+      ).rejects.toMatchObject({ code: "invalid_grant_author" });
     });
 
     it("rejects when revocation list is unreachable", async () => {
@@ -341,9 +386,9 @@ describe("verify", () => {
             { status: 200 },
           );
         }
-        if (path.includes("/users/user-abc/key")) {
+        if (path.includes(`/directory/subjects/${encodeURIComponent("huglo:user:user-abc")}/key`)) {
           return Response.json(
-            { userId: "user-abc", publicKey: authorKeys.publicKeyBase64 },
+            { subject: "huglo:user:user-abc", publicKey: authorKeys.publicKeyBase64 },
             { status: 200 },
           );
         }

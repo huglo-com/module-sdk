@@ -66,8 +66,9 @@ Modules can run against Huglo's hosted directory or a custom compatible identity
 |--------|------|---------|
 | GET | `/directory/modules/{moduleId}` | Resolve a module endpoint and public key. |
 | GET | `/directory/modules/{moduleId}/keys/{keyId}` | Resolve a versioned module key (future rotation support). |
-| GET | `/directory/users/{userId}/key` | Resolve a user public key. |
-| GET | `/directory/users/{userId}/keys/{keyId}` | Resolve a versioned user key (future rotation support). |
+| GET | `/directory/subjects/{subject}/key` | Resolve a subject public key (`huglo:user:…`, `huglo:agent:…`, claimed namespaces). `{subject}` is URL-encoded. |
+| GET | `/directory/users/{userId}/key` | **Deprecated** (not used by module-sdk 1.5+). Successor: `GET /directory/subjects/huglo:user:{userId}/key`. |
+| GET | `/directory/users/{userId}/keys/{keyId}` | **Deprecated** (not used by module-sdk 1.5+). Versioned user keys (future rotation). |
 | GET | `/directory/revocations` | Fetch revoked grant ids. |
 | POST | `/directory/modules/{moduleId}/invites` | Create a grant invite from a signed requester payload. |
 | POST | `/directory/grants/exchange` | Exchange a single-use code for signed grants. |
@@ -139,11 +140,29 @@ GET /directory/modules/{moduleId}/keys/{keyId}
 ```
 Response: same shape as §3.1. Used when key rotation is implemented. May return `404` until then.
 
-### 3.3 Get user public key
+### 3.3 Get subject public key
+```
+GET /directory/subjects/{url-encoded-subject}/key
+```
+- `{subject}` is the **full** Huglo identifier (`huglo:user:<id>`, `huglo:agent:<id>`, `huglo:<claimed-ns>:<id>`). Encode with `encodeURIComponent(subject)`.
+- Do not rewrite `huglo:agent:` (or other non-user namespaces) into a user id. A miss must fail closed (`404`); do not fall back to `/directory/users/…`.
+
+Response `200`:
+```json
+{
+  "subject": "huglo:agent:agt_1",
+  "publicKey": "<base64 raw 32-byte Ed25519 public key>"
+}
+```
+- Used by holders to verify **config identity proofs** (`verifyConfigProof`) against `assertion.subject`.
+- Used for all Huglo subject key lookups in module-sdk 1.5+ (`getSubjectKey`), including config proofs and grant **Sig 1** (after the holder rejects non-`huglo:user:` `grant.author` values).
+
+### 3.3.1 Get user public key (deprecated)
 ```
 GET /directory/users/{userId}/key
 ```
 - `{userId}` is the **bare** id, without the `huglo:user:` prefix.
+- **Deprecated.** Use `GET /directory/subjects/huglo:user:{userId}/key`.
 
 Response `200`:
 ```json
@@ -152,13 +171,12 @@ Response `200`:
   "publicKey": "<base64 raw 32-byte Ed25519 public key>"
 }
 ```
-- Used by holders to verify **Sig 1** (the grant signature) when `author` is a user.
 
 ### 3.4 Get user key by version (rotation; future)
 ```
 GET /directory/users/{userId}/keys/{keyId}
 ```
-Response: same shape as §3.3. Optional until rotation.
+Response: same shape as §3.3.1. Optional until rotation.
 
 ### 3.5 Revocation list
 ```
@@ -285,8 +303,8 @@ Read as: **author** authorizes **requester** to use **scope** at **holder**, con
 
 Field rules:
 - `subject` is the Huglo identifier for whose data the grant applies (for example `huglo:user:<id>` or another Directory-issued subject form).
-- `author` is the Huglo identifier of the party that signed Sig 1. It may equal `subject` (self-authorization) or differ when the Directory has authorized a controller relationship (for example power-of-attorney) at mint time.
-- Holders verify Sig 1 against the Directory key for `author` and do **not** re-implement Directory mint policy (such as requiring `author === subject`). Users choose a Directory and trust its mint rules.
+- `author` is the Huglo identifier of the party that signed Sig 1. In module-sdk 1.5+, holders require `author` to be a **`huglo:user:<id>`** subject (Sig 1 is user-authored). It may equal `subject` (self-authorization) or differ when the Directory has authorized a controller relationship (for example power-of-attorney) at mint time.
+- Holders verify Sig 1 with `getSubjectKey(author)` after rejecting non-user authors, and do **not** re-implement other Directory mint policy (such as requiring `author === subject`). Users choose a Directory and trust its mint rules.
 - `holder`, `requester` are bare module ids.
 - `constraints` is **reserved**; empty `{}` means no restriction. Holders reject any unrecognized constraint key (fail closed), so constraints should only be emitted once modules support them.
 - `issued_at` / `expires_at` are ISO 8601.
@@ -448,7 +466,7 @@ Session A and B are **independent**. Invoke enforcement uses only session B (`di
 }
 ```
 
-- `subject` — the Huglo user configuring the module (same namespace as grant `subject`).
+- `subject` — the Huglo principal configuring the module (same value as grant `subject`: `huglo:user:<id>`, `huglo:agent:<id>`, or another Directory subject).
 - `audience` — holder module id the proof is minted for (prevents cross-module replay).
 - `purpose` — must be `"config"`.
 - `nonce` — unique id for this proof; **always generated by the directory** at mint time (`randomUUID()`). Present in the signed assertion; host must not supply it on the mint request.
@@ -504,7 +522,7 @@ Also requires Huglo OAuth session A (config session cookie). Without it → `401
 
 On save, the module:
 
-1. Verifies the proof signature against `GET /directory/users/{subject}/key`.
+1. Verifies the proof signature against `GET /directory/subjects/{url-encoded-assertion.subject}/key` (the key registered for that exact subject).
 2. Checks `purpose === "config"`, `audience === moduleId`, expiry, and nonce replay.
 3. Stores `directorySubject = assertion.subject` on the config instance (required field; re-stamped on every edit with a fresh proof).
 
@@ -561,7 +579,8 @@ Modules verify inbound calls, sign outbound calls, and verify signed responses. 
 |--------|------|---------|--------|
 | GET | `/directory/modules/{moduleId}` | Module endpoint + public key | Yes |
 | GET | `/directory/modules/{moduleId}/keys/{keyId}` | Versioned module key | Future |
-| GET | `/directory/users/{userId}/key` | User public key | Yes |
+| GET | `/directory/subjects/{subject}/key` | Subject public key (full `huglo:` id, URL-encoded) | Yes |
+| GET | `/directory/users/{userId}/key` | User public key | Deprecated (use subjects URL) |
 | GET | `/directory/users/{userId}/keys/{keyId}` | Versioned user key | Future |
 | GET | `/directory/revocations` | Revoked grant ids | Yes |
 | POST | `/directory/modules/{moduleId}/invites` | Create grant invite (signed payload) | Yes |

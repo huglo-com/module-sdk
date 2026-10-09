@@ -64,6 +64,10 @@ function parseConfigProof(raw: unknown): ConfigProof {
 /**
  * Verify a directory-signed config identity proof.
  * Returns the verified Huglo subject (directorySubject) on success.
+ *
+ * The signature is checked against the directory key registered for
+ * `assertion.subject` (`GET /directory/subjects/{subject}/key`), not against
+ * a user-id rewrite of that subject.
  */
 export async function verifyConfigProof(
   rawProof: unknown,
@@ -94,9 +98,12 @@ export async function verifyConfigProof(
 
   let publicKey;
   try {
-    publicKey = await options.directory.getUserKey(assertion.subject);
+    publicKey = await options.directory.getSubjectKey(assertion.subject);
   } catch {
-    throw configProofError("config_proof_user_not_found", "Config proof subject not found in directory");
+    throw configProofError(
+      "config_proof_user_not_found",
+      "Config proof subject not found in directory",
+    );
   }
 
   if (!verifyObject(assertion, proof.signature, publicKey)) {
