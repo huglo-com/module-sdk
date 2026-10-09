@@ -34,8 +34,28 @@ describe("parseHugloSubject", () => {
     );
   });
 
-  it("rejects userx namespace (valid shape but not user)", () => {
+  it("accepts userx namespace in the parser (grant author check enforces user)", () => {
     expect(parseHugloSubject("huglo:userx:abc").namespace).toBe("userx");
+  });
+
+  it("accepts id up to 256 characters", () => {
+    const id = "a".repeat(256);
+    expect(parseHugloSubject(`huglo:user:${id}`).id).toBe(id);
+  });
+
+  it("rejects id longer than 256 characters", () => {
+    const id = "a".repeat(257);
+    expect(() => parseHugloSubject(`huglo:user:${id}`)).toThrow(
+      expect.objectContaining({ code: "invalid_subject" }),
+    );
+  });
+
+  it("rejects ids containing whitespace", () => {
+    for (const id of ["has space", "has\ttab", "has\nline"]) {
+      expect(() => parseHugloSubject(`huglo:user:${id}`)).toThrow(
+        expect.objectContaining({ code: "invalid_subject" }),
+      );
+    }
   });
 
   it("rejects missing or empty id", () => {

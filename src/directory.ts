@@ -248,7 +248,11 @@ export class HttpDirectoryClient implements DirectoryClient {
         `Directory returned ${response.status}`,
       );
     }
-    return (await response.json()) as unknown;
+    try {
+      return (await response.json()) as unknown;
+    } catch {
+      throw infraError("invalid_response", "Directory returned non-JSON response");
+    }
   }
 
   private async fetchJson<T>(url: string): Promise<T> {

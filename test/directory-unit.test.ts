@@ -108,6 +108,24 @@ describe("directory unit", () => {
       });
     });
 
+    it("getSubjectKey throws invalid_response when body is not JSON", async () => {
+      const fetchFn = vi.fn().mockResolvedValue(
+        new Response("not json", {
+          status: 200,
+          headers: { "Content-Type": "text/plain" },
+        }),
+      );
+      const client = new HttpDirectoryClient({
+        directoryUrl: "https://directory.example",
+        fetch: fetchFn,
+      });
+
+      await expect(client.getSubjectKey("huglo:user:alice")).rejects.toMatchObject({
+        code: "invalid_response",
+        message: "Directory returned non-JSON response",
+      });
+    });
+
     it("getSubjectKey fails closed on 404", async () => {
       const fetchFn = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
       const client = new HttpDirectoryClient({

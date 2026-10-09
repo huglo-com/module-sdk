@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { generateKeyPair } from "../src/keys.js";
 import { signObject } from "../src/signing.js";
+import type { DirectoryClient } from "../src/directory.js";
 import { HttpDirectoryClient, InMemoryDirectoryClient } from "../src/directory.js";
 import {
   verifyConfigProof,
@@ -126,6 +127,30 @@ describe("config-proof", () => {
   it("rejects malformed proof", async () => {
     await expect(verifyConfigProof(null, verifyOpts())).rejects.toMatchObject({
       code: "invalid_config_proof",
+    });
+  });
+
+  it("maps non-ModuleError directory failures to retryable unavailable", async () => {
+    const proof = validProof();
+    const directory: DirectoryClient = {
+      getSubjectKey: () => Promise.reject(new TypeError("fetch failed")),
+      getModuleKey: async () => {
+        throw new Error("not used");
+      },
+      getEndpoint: async () => {
+        throw new Error("not used");
+      },
+      isRevoked: async () => false,
+      createInvite: async () => {
+        throw new Error("not used");
+      },
+      exchangeGrants: async () => [],
+    };
+    await expect(
+      verifyConfigProof(proof, { moduleId, directory, nonceCache }),
+    ).rejects.toMatchObject({
+      code: "config_proof_directory_unavailable",
+      retryable: true,
     });
   });
 

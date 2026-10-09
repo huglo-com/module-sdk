@@ -47,7 +47,7 @@ function configProofRetryable(message: string): ModuleError {
 
 function mapDirectoryErrorForConfigProof(err: unknown): ModuleError {
   if (!(err instanceof ModuleError)) {
-    return configProofError("config_proof_invalid", "Config proof could not be verified");
+    return configProofRetryable("Config proof verification is temporarily unavailable");
   }
   switch (err.code) {
     case "subject_not_found":
