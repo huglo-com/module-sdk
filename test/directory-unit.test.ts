@@ -19,10 +19,10 @@ describe("directory unit", () => {
       });
     });
 
-    it("getUserKey throws user_not_found", async () => {
+    it("getSubjectKey throws subject_not_found for missing user subject", async () => {
       const directory = new InMemoryDirectoryClient();
-      await expect(directory.getUserKey("huglo:user:missing")).rejects.toMatchObject({
-        code: "user_not_found",
+      await expect(directory.getSubjectKey("huglo:user:missing")).rejects.toMatchObject({
+        code: "subject_not_found",
       });
     });
 
@@ -33,15 +33,14 @@ describe("directory unit", () => {
       });
     });
 
-    it("does not resolve huglo:agent subjects from the user key map", async () => {
+    it("resolves user and agent subjects independently", async () => {
       const userKeys = generateKeyPair();
       const agentKeys = generateKeyPair();
       const directory = new InMemoryDirectoryClient();
-      directory.registerUser("agt_1", userKeys.publicKey);
+      directory.registerUser("huglo:user:agt_1", userKeys.publicKey);
       directory.registerSubject("huglo:agent:agt_1", agentKeys.publicKey);
 
       await expect(directory.getSubjectKey("huglo:agent:agt_1")).resolves.toBe(agentKeys.publicKey);
-      await expect(directory.getUserKey("agt_1")).resolves.toBe(userKeys.publicKey);
       await expect(directory.getSubjectKey("huglo:user:agt_1")).resolves.toBe(userKeys.publicKey);
     });
 
@@ -59,13 +58,12 @@ describe("directory unit", () => {
       });
     });
 
-    it("registerUser strips huglo:user: prefix", async () => {
+    it("registerUser stores the full huglo:user subject", async () => {
       const keys = generateKeyPair();
       const directory = new InMemoryDirectoryClient();
       directory.registerUser("huglo:user:bare-id", keys.publicKey);
 
-      await expect(directory.getUserKey("bare-id")).resolves.toBeDefined();
-      await expect(directory.getUserKey("huglo:user:bare-id")).resolves.toBeDefined();
+      await expect(directory.getSubjectKey("huglo:user:bare-id")).resolves.toBe(keys.publicKey);
     });
   });
 
@@ -90,35 +88,6 @@ describe("directory unit", () => {
       expect(String(fetchFn.mock.calls[0]?.[0])).toBe(
         `https://directory.example/directory/subjects/${encodeURIComponent(subject)}/key`,
       );
-    });
-
-    it("getUserKey without keyId uses the subjects URL for huglo:user and huglo:agent", async () => {
-      const userSubject = "huglo:user:alice";
-      const agentSubject = "huglo:agent:agt_1";
-      const fetchFn = vi.fn().mockImplementation(async (url: string | URL | Request) => {
-        const path = String(url);
-        if (path.includes(encodeURIComponent(userSubject))) {
-          return Response.json({ subject: userSubject, publicKey: keys.publicKeyBase64 });
-        }
-        if (path.includes(encodeURIComponent(agentSubject))) {
-          return Response.json({ subject: agentSubject, publicKey: keys.publicKeyBase64 });
-        }
-        return new Response(null, { status: 404 });
-      });
-      const client = new HttpDirectoryClient({
-        directoryUrl: "https://directory.example",
-        fetch: fetchFn,
-      });
-
-      await client.getUserKey(userSubject);
-      await client.getUserKey(agentSubject);
-
-      const requested = fetchFn.mock.calls.map((call) => String(call[0]));
-      expect(requested).toEqual([
-        `https://directory.example/directory/subjects/${encodeURIComponent(userSubject)}/key`,
-        `https://directory.example/directory/subjects/${encodeURIComponent(agentSubject)}/key`,
-      ]);
-      expect(requested.some((url) => url.includes("/directory/users/"))).toBe(false);
     });
 
     it("getSubjectKey fails closed when the directory binds a different subject", async () => {
@@ -215,8 +184,8 @@ describe("directory unit", () => {
 
       const directoryCalls: [string, DirectoryCall][] = [
         ["getModuleKey", (c) => c.getModuleKey("mod-1")],
-        ["getUserKey", (c) => c.getUserKey("user-1")],
-        ["getSubjectKey", (c) => c.getSubjectKey("huglo:agent:agt_1")],
+        ["getSubjectKey", (c) => c.getSubjectKey("huglo:user:user-1")],
+        ["getSubjectKey (agent)", (c) => c.getSubjectKey("huglo:agent:agt_1")],
         ["getEndpoint", (c) => c.getEndpoint("mod-1")],
         ["isRevoked", (c) => c.isRevoked("g-1")],
         ["createInvite", (c) => c.createInvite("mod-1", signedInvite)],

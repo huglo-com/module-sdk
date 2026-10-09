@@ -19,7 +19,7 @@ describe("config-proof", () => {
   beforeEach(() => {
     directory.clear();
     nonceCache.clear();
-    directory.registerUser("alice", userKeys.publicKey);
+    directory.registerUser("huglo:user:alice", userKeys.publicKey);
   });
 
   function verifyOpts(overrides: { now?: number } = {}) {

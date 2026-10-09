@@ -76,7 +76,7 @@ describe("emitters", () => {
     emitterKeys.publicKey,
     emitterKeys.publicKeyBase64,
   );
-  directory.registerUser("user-abc", authorKeys.publicKey);
+  directory.registerUser("huglo:user:user-abc", authorKeys.publicKey);
 
   function buildGrant(overrides: Partial<SignedGrant["grant"]> = {}): SignedGrant {
     const grant = {

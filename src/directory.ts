@@ -30,21 +30,6 @@ async function directoryErrorMessage(response: Response): Promise<string> {
   return base;
 }
 
-const HUGLO_USER_PREFIX = "huglo:user:";
-
-function isHugloSubject(value: string): boolean {
-  return value.startsWith("huglo:") && value.length > "huglo:".length;
-}
-
-function isHugloUserSubject(value: string): boolean {
-  return value.startsWith(HUGLO_USER_PREFIX) && value.length > HUGLO_USER_PREFIX.length;
-}
-
-function toHugloUserSubject(userId: string): string {
-  if (isHugloUserSubject(userId)) return userId;
-  return `${HUGLO_USER_PREFIX}${userId}`;
-}
-
 function subjectKeyUrl(baseUrl: string, subject: string): string {
   return `${baseUrl}/directory/subjects/${encodeURIComponent(subject)}/key`;
 }
@@ -76,13 +61,6 @@ export interface DirectoryClient {
    * Lookup is `GET /directory/subjects/{encodeURIComponent(subject)}/key`.
    */
   getSubjectKey(subject: string): Promise<KeyObject>;
-  /**
-   * @deprecated Use `getSubjectKey` with the full `huglo:` subject.
-   * The `/directory/users/:id/key` route is deprecated; user keys are
-   * `GET /directory/subjects/huglo:user:{id}/key`.
-   * Fetch a user's Ed25519 public key (cached). `userId` may be the bare id or `huglo:user:<id>`.
-   */
-  getUserKey(userId: string, keyId?: string): Promise<KeyObject>;
   /** Fetch a module's base endpoint URL (cached). */
   getEndpoint(moduleId: string): Promise<string>;
   /** Check whether a grant_id is on the revocation list. */
@@ -117,11 +95,6 @@ interface ModuleDirectoryEntry {
   publicKey: string;
 }
 
-interface UserKeyEntry {
-  userId: string;
-  publicKey: string;
-}
-
 interface RevocationList {
   grantIds: string[];
 }
@@ -137,7 +110,6 @@ export class HttpDirectoryClient implements DirectoryClient {
   private readonly fetchFn: typeof globalThis.fetch;
 
   private readonly moduleKeyCache = new Map<string, CacheEntry<KeyObject>>();
-  private readonly userKeyCache = new Map<string, CacheEntry<KeyObject>>();
   private readonly subjectKeyCache = new Map<string, CacheEntry<KeyObject>>();
   private readonly endpointCache = new Map<string, CacheEntry<string>>();
   private revocationSet: Set<string> = new Set();
@@ -182,38 +154,6 @@ export class HttpDirectoryClient implements DirectoryClient {
     const key = importPublicKeyBase64(publicKey);
     this.setCached(this.subjectKeyCache, subject, key);
     return key;
-  }
-
-  /**
-   * @deprecated Use `getSubjectKey` with the full `huglo:` subject.
-   * Without `keyId`, this looks up `GET /directory/subjects/{subject}/key`
-   * (successor of `/directory/users/:id/key`). Non-user `huglo:` subjects are
-   * forwarded as-is and are never stripped onto the users route.
-   */
-  async getUserKey(userId: string, keyId?: string): Promise<KeyObject> {
-    if (keyId) {
-      if (isHugloSubject(userId) && !isHugloUserSubject(userId)) {
-        throw infraError(
-          "directory_error",
-          "getUserKey does not resolve non-user Huglo subjects; use getSubjectKey",
-        );
-      }
-      const bareId = isHugloUserSubject(userId)
-        ? userId.slice(HUGLO_USER_PREFIX.length)
-        : userId;
-      const cacheKey = `${bareId}:${keyId}`;
-      const cached = this.getCached(this.userKeyCache, cacheKey);
-      if (cached) return cached;
-
-      const url = `${this.baseUrl}/directory/users/${encodeURIComponent(bareId)}/keys/${encodeURIComponent(keyId)}`;
-      const entry = await this.fetchJson<UserKeyEntry>(url);
-      const key = importPublicKeyBase64(entry.publicKey);
-      this.setCached(this.userKeyCache, cacheKey, key);
-      return key;
-    }
-
-    const subject = isHugloSubject(userId) ? userId : toHugloUserSubject(userId);
-    return this.getSubjectKey(subject);
   }
 
   async getEndpoint(moduleId: string): Promise<string> {
@@ -345,7 +285,6 @@ export class InMemoryDirectoryClient implements DirectoryClient {
     string,
     { endpoint: string; publicKey: KeyObject; publicKeyBase64: string }
   >();
-  private readonly users = new Map<string, KeyObject>();
   private readonly subjects = new Map<string, KeyObject>();
   private readonly revoked = new Set<string>();
   private readonly inviteResponses = new Map<string, CreateInviteResponse>();
@@ -360,14 +299,12 @@ export class InMemoryDirectoryClient implements DirectoryClient {
     this.modules.set(moduleId, { endpoint, publicKey, publicKeyBase64 });
   }
 
-  registerUser(userId: string, publicKey: KeyObject): void {
-    const bareId = isHugloUserSubject(userId)
-      ? userId.slice(HUGLO_USER_PREFIX.length)
-      : userId;
-    this.users.set(bareId, publicKey);
+  /** Register a `huglo:user:<id>` subject key (test helper). */
+  registerUser(subject: string, publicKey: KeyObject): void {
+    this.subjects.set(subject, publicKey);
   }
 
-  /** Register a non-user Huglo subject key (`huglo:agent:<id>`, claimed namespaces, …). */
+  /** Register a Huglo subject key (`huglo:agent:<id>`, claimed namespaces, …). */
   registerSubject(subject: string, publicKey: KeyObject): void {
     this.subjects.set(subject, publicKey);
   }
@@ -389,7 +326,6 @@ export class InMemoryDirectoryClient implements DirectoryClient {
   /** Clear all registered modules, users, and revocations (for tests). */
   clear(): void {
     this.modules.clear();
-    this.users.clear();
     this.subjects.clear();
     this.revoked.clear();
     this.inviteResponses.clear();
@@ -405,33 +341,9 @@ export class InMemoryDirectoryClient implements DirectoryClient {
   }
 
   async getSubjectKey(subject: string): Promise<KeyObject> {
-    if (isHugloUserSubject(subject)) {
-      const key = this.users.get(subject.slice(HUGLO_USER_PREFIX.length));
-      if (!key) {
-        throw infraError("subject_not_found", `Subject ${subject} not in directory`);
-      }
-      return key;
-    }
     const key = this.subjects.get(subject);
     if (!key) {
       throw infraError("subject_not_found", `Subject ${subject} not in directory`);
-    }
-    return key;
-  }
-
-  /**
-   * @deprecated Use `getSubjectKey` with the full `huglo:` subject.
-   */
-  async getUserKey(userId: string, _keyId?: string): Promise<KeyObject> {
-    if (isHugloSubject(userId) && !isHugloUserSubject(userId)) {
-      return this.getSubjectKey(userId);
-    }
-    const bareId = isHugloUserSubject(userId)
-      ? userId.slice(HUGLO_USER_PREFIX.length)
-      : userId;
-    const key = this.users.get(bareId);
-    if (!key) {
-      throw infraError("user_not_found", `User ${userId} not in directory`);
     }
     return key;
   }

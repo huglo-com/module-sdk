@@ -162,16 +162,31 @@ async function verifyModuleSignature(
   }
 }
 
+const HUGLO_USER_SUBJECT_PREFIX = "huglo:user:";
+
+/** Grant Sig 1 must be signed by a user subject, not an agent or bare id. */
+function assertGrantAuthorIsUserSubject(author: string): void {
+  if (
+    !author.startsWith(HUGLO_USER_SUBJECT_PREFIX) ||
+    author.length <= HUGLO_USER_SUBJECT_PREFIX.length
+  ) {
+    throw authError(
+      "invalid_grant_author",
+      "Grant author must be a huglo:user subject",
+    );
+  }
+}
+
 /** Step 5: Verify Sig 1 (grant author). */
 async function verifyGrantSignature(
   grant: SignedGrant,
   directory: DirectoryClient,
 ): Promise<void> {
+  assertGrantAuthorIsUserSubject(grant.grant.author);
+
   let authorKey: KeyObject;
   try {
-    const parsed = parseSignature(grant.signature);
-    const authorId = grant.grant.author;
-    authorKey = await directory.getUserKey(authorId, parsed.keyId);
+    authorKey = await directory.getSubjectKey(grant.grant.author);
   } catch (err) {
     rethrowDirectoryError(err, "Unable to fetch author public key");
   }

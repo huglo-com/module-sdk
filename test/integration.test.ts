@@ -36,7 +36,7 @@ export async function createTestModules(): Promise<TestModules> {
 
   directory.registerModule("trovi", holderEndpoint, holderKeys.publicKey, holderKeys.publicKeyBase64);
   directory.registerModule("foaf", requesterEndpoint, requesterKeys.publicKey, requesterKeys.publicKeyBase64);
-  directory.registerUser("user-abc", authorKeys.publicKey);
+  directory.registerUser("huglo:user:user-abc", authorKeys.publicKey);
 
   let handlerCalled = false;
 
