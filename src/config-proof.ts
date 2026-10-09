@@ -37,6 +37,38 @@ function configProofError(code: string, message: string): ModuleError {
   return new ModuleError({ code, message, retryable: false });
 }
 
+function configProofRetryable(message: string): ModuleError {
+  return new ModuleError({
+    code: "config_proof_directory_unavailable",
+    message,
+    retryable: true,
+  });
+}
+
+function mapDirectoryErrorForConfigProof(err: unknown): ModuleError {
+  if (!(err instanceof ModuleError)) {
+    return configProofError("config_proof_invalid", "Config proof could not be verified");
+  }
+  switch (err.code) {
+    case "subject_not_found":
+      return configProofError(
+        "config_proof_subject_not_found",
+        "Config proof subject not found in directory",
+      );
+    case "invalid_subject":
+    case "invalid_response":
+      return configProofError("config_proof_invalid", "Config proof could not be verified");
+    case "directory_unreachable":
+    case "directory_error":
+      return configProofRetryable("Config proof verification is temporarily unavailable");
+    default:
+      if (err.retryable) {
+        return configProofRetryable("Config proof verification is temporarily unavailable");
+      }
+      return configProofError("config_proof_invalid", "Config proof could not be verified");
+  }
+}
+
 function parseConfigProof(raw: unknown): ConfigProof {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw configProofError("invalid_config_proof", "Config proof must be an object");
@@ -99,11 +131,8 @@ export async function verifyConfigProof(
   let publicKey;
   try {
     publicKey = await options.directory.getSubjectKey(assertion.subject);
-  } catch {
-    throw configProofError(
-      "config_proof_user_not_found",
-      "Config proof subject not found in directory",
-    );
+  } catch (err) {
+    throw mapDirectoryErrorForConfigProof(err);
   }
 
   if (!verifyObject(assertion, proof.signature, publicKey)) {

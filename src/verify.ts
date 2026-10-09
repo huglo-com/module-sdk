@@ -10,6 +10,7 @@ import {
   sig2Payload,
   sig2OpenPayload,
 } from "./envelope.js";
+import { parseHugloSubject } from "./huglo-subject.js";
 import { authError, infraError, ModuleError } from "./errors.js";
 import { verifyObject, parseSignature } from "./signing.js";
 
@@ -162,14 +163,10 @@ async function verifyModuleSignature(
   }
 }
 
-const HUGLO_USER_SUBJECT_PREFIX = "huglo:user:";
-
 /** Grant Sig 1 must be signed by a user subject, not an agent or bare id. */
 function assertGrantAuthorIsUserSubject(author: string): void {
-  if (
-    !author.startsWith(HUGLO_USER_SUBJECT_PREFIX) ||
-    author.length <= HUGLO_USER_SUBJECT_PREFIX.length
-  ) {
+  const parsed = parseHugloSubject(author);
+  if (parsed.namespace !== "user") {
     throw authError(
       "invalid_grant_author",
       "Grant author must be a huglo:user subject",

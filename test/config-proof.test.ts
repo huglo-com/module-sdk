@@ -100,7 +100,14 @@ describe("config-proof", () => {
       privateKey: userKeys.privateKey,
     });
     await expect(verifyConfigProof(proof, verifyOpts())).rejects.toMatchObject({
-      code: "config_proof_user_not_found",
+      code: "config_proof_subject_not_found",
+    });
+  });
+
+  it("rejects malformed assertion subject before directory lookup", async () => {
+    const proof = validProof({ subject: "huglo:user:" });
+    await expect(verifyConfigProof(proof, verifyOpts())).rejects.toMatchObject({
+      code: "config_proof_invalid",
     });
   });
 
@@ -237,7 +244,20 @@ describe("config-proof HttpDirectoryClient lookup", () => {
     });
     const fetchFn = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
     await expect(httpVerify(fetchFn, proof)).rejects.toMatchObject({
-      code: "config_proof_user_not_found",
+      code: "config_proof_subject_not_found",
+    });
+  });
+
+  it("maps directory 503 to a retryable config proof error", async () => {
+    const proof = createSignedConfigProof({
+      subject: "huglo:agent:agt_missing",
+      audience: moduleId,
+      privateKey: agentKeys.privateKey,
+    });
+    const fetchFn = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
+    await expect(httpVerify(fetchFn, proof)).rejects.toMatchObject({
+      code: "config_proof_directory_unavailable",
+      retryable: true,
     });
   });
 
@@ -254,7 +274,7 @@ describe("config-proof HttpDirectoryClient lookup", () => {
       }),
     );
     await expect(httpVerify(fetchFn, proof)).rejects.toMatchObject({
-      code: "config_proof_user_not_found",
+      code: "config_proof_invalid",
     });
   });
 });

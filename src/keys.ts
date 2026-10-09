@@ -5,6 +5,7 @@ import {
   type KeyObject,
 } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { infraError } from "./errors.js";
 
 export interface ModuleKeyPair {
   publicKey: KeyObject;
@@ -27,9 +28,14 @@ export function exportPublicKeyBase64(publicKey: KeyObject): string {
   return der.subarray(-32).toString("base64");
 }
 
-/** Import a base64 raw Ed25519 public key. */
+const ED25519_RAW_PUBLIC_KEY_BYTES = 32;
+
+/** Import a base64 raw Ed25519 public key (wire format: exactly 32 bytes). */
 export function importPublicKeyBase64(b64: string): KeyObject {
   const raw = Buffer.from(b64, "base64");
+  if (raw.length !== ED25519_RAW_PUBLIC_KEY_BYTES) {
+    throw infraError("invalid_response", "Public key must be 32 raw bytes");
+  }
   // Wrap raw 32-byte key in SPKI DER for Node crypto
   const prefix = Buffer.from("302a300506032b6570032100", "hex");
   const der = Buffer.concat([prefix, raw]);
