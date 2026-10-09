@@ -1,6 +1,7 @@
 import type { KeyObject } from "node:crypto";
 import { importPublicKeyBase64 } from "./keys.js";
-import { infraError } from "./errors.js";
+import { parseHugloSubject } from "./huglo-subject.js";
+import { infraError, ModuleError } from "./errors.js";
 import type {
   CreateInviteResponse,
   SignedGrant,
@@ -32,6 +33,15 @@ async function directoryErrorMessage(response: Response): Promise<string> {
 
 function subjectKeyUrl(baseUrl: string, subject: string): string {
   return `${baseUrl}/directory/subjects/${encodeURIComponent(subject)}/key`;
+}
+
+function importDirectoryPublicKey(b64: string): KeyObject {
+  try {
+    return importPublicKeyBase64(b64);
+  } catch (err) {
+    if (err instanceof ModuleError) throw err;
+    throw infraError("invalid_response", "Directory public key is malformed");
+  }
 }
 
 function readSubjectKeyPublicKey(body: unknown, requestedSubject: string): string {
@@ -132,7 +142,7 @@ export class HttpDirectoryClient implements DirectoryClient {
       : `${this.baseUrl}/directory/modules/${encodeURIComponent(moduleId)}`;
 
     const entry = await this.fetchJson<ModuleDirectoryEntry>(url);
-    const key = importPublicKeyBase64(entry.publicKey);
+    const key = importDirectoryPublicKey(entry.publicKey);
     this.setCached(this.moduleKeyCache, cacheKey, key);
     if (!keyId) {
       this.setCached(this.endpointCache, moduleId, entry.endpoint.replaceAll(/\/$/g, ""));
@@ -145,14 +155,15 @@ export class HttpDirectoryClient implements DirectoryClient {
    * The request path encodes the full subject; `huglo:agent:` is never rewritten as a user id.
    */
   async getSubjectKey(subject: string): Promise<KeyObject> {
-    const cached = this.getCached(this.subjectKeyCache, subject);
+    const parsed = parseHugloSubject(subject);
+    const cached = this.getCached(this.subjectKeyCache, parsed.subject);
     if (cached) return cached;
 
-    const url = subjectKeyUrl(this.baseUrl, subject);
-    const body: unknown = await this.fetchJson<unknown>(url);
-    const publicKey = readSubjectKeyPublicKey(body, subject);
-    const key = importPublicKeyBase64(publicKey);
-    this.setCached(this.subjectKeyCache, subject, key);
+    const url = subjectKeyUrl(this.baseUrl, parsed.subject);
+    const body: unknown = await this.fetchSubjectKeyJson(url);
+    const publicKey = readSubjectKeyPublicKey(body, parsed.subject);
+    const key = importDirectoryPublicKey(publicKey);
+    this.setCached(this.subjectKeyCache, parsed.subject, key);
     return key;
   }
 
@@ -164,11 +175,7 @@ export class HttpDirectoryClient implements DirectoryClient {
     const entry = await this.fetchJson<ModuleDirectoryEntry>(url);
     const endpoint = entry.endpoint.replaceAll(/\/$/g, "");
     this.setCached(this.endpointCache, moduleId, endpoint);
-    this.setCached(
-      this.moduleKeyCache,
-      moduleId,
-      importPublicKeyBase64(entry.publicKey),
-    );
+    this.setCached(this.moduleKeyCache, moduleId, importDirectoryPublicKey(entry.publicKey));
     return endpoint;
   }
 
@@ -218,6 +225,34 @@ export class HttpDirectoryClient implements DirectoryClient {
 
   private setCached<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T): void {
     cache.set(key, { value, expiresAt: Date.now() + this.ttlMs });
+  }
+
+  private async fetchSubjectKeyJson(url: string): Promise<unknown> {
+    let response: Response;
+    try {
+      response = await this.fetchFn(url, {
+        headers: { Accept: "application/json" },
+      });
+    } catch {
+      throw infraError(
+        "directory_unreachable",
+        "Unable to reach Huglo directory",
+      );
+    }
+    if (response.status === 404) {
+      throw infraError("subject_not_found", "Subject not found in directory");
+    }
+    if (!response.ok) {
+      throw infraError(
+        "directory_error",
+        `Directory returned ${response.status}`,
+      );
+    }
+    try {
+      return (await response.json()) as unknown;
+    } catch {
+      throw infraError("invalid_response", "Directory returned non-JSON response");
+    }
   }
 
   private async fetchJson<T>(url: string): Promise<T> {
@@ -341,9 +376,10 @@ export class InMemoryDirectoryClient implements DirectoryClient {
   }
 
   async getSubjectKey(subject: string): Promise<KeyObject> {
-    const key = this.subjects.get(subject);
+    const parsed = parseHugloSubject(subject);
+    const key = this.subjects.get(parsed.subject);
     if (!key) {
-      throw infraError("subject_not_found", `Subject ${subject} not in directory`);
+      throw infraError("subject_not_found", "Subject not found in directory");
     }
     return key;
   }

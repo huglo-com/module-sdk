@@ -368,6 +368,34 @@ describe("verify", () => {
           inputSchema,
           directory,
         }),
+      ).rejects.toMatchObject({ code: "invalid_subject" });
+    });
+
+    it("rejects huglo:user: with empty id before directory lookup", async () => {
+      const grant = buildGrant({ author: "huglo:user:" });
+      const req = buildRequest(grant, { amount: 1, vendor: "x" });
+
+      await expect(
+        verifyInvokeRequest(req, nonceCache, {
+          moduleId: "trovi",
+          urlScope: "invoices:write",
+          inputSchema,
+          directory,
+        }),
+      ).rejects.toMatchObject({ code: "invalid_subject" });
+    });
+
+    it("rejects grant author with non-user namespace (userx)", async () => {
+      const grant = buildGrant({ author: "huglo:userx:abc" });
+      const req = buildRequest(grant, { amount: 1, vendor: "x" });
+
+      await expect(
+        verifyInvokeRequest(req, nonceCache, {
+          moduleId: "trovi",
+          urlScope: "invoices:write",
+          inputSchema,
+          directory,
+        }),
       ).rejects.toMatchObject({ code: "invalid_grant_author" });
     });
 

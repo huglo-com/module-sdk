@@ -87,6 +87,22 @@ Modules can run against Huglo's hosted directory or a custom compatible identity
 - **Holder** — the module that holds data or performs an action; it verifies and serves invoke requests.
 - **Requester** — the module making the call; it signs the request.
 
+### 1.1 Huglo subject identifiers
+
+Directory-issued principals use a single wire form with exactly three colon-separated segments:
+
+```
+huglo:<namespace>:<id>
+```
+
+| Segment | Rules |
+|---------|--------|
+| Prefix | Literal `huglo:` |
+| `<namespace>` | Lowercase ASCII letters and digits only, length 4–16 (for example `user`, `agent`, `proj1`). |
+| `<id>` | Non-empty opaque token, 1–256 characters, no whitespace and **no colons** (so the subject cannot embed extra segments). Examples: `abc123`, `user-abc`, `agt_1`, `entity-1`. |
+
+module-sdk 1.5.1+ validates this shape in `parseHugloSubject` before any subject-key directory lookup or cache insert. Malformed subjects are rejected with `invalid_subject` (fail closed). Grant **Sig 1** additionally requires `namespace === user` (`invalid_grant_author`).
+
 ---
 
 ## 2. Cryptography contract
@@ -156,6 +172,7 @@ Response `200`:
 ```
 - Used by holders to verify **config identity proofs** (`verifyConfigProof`) against `assertion.subject`.
 - Used for all Huglo subject key lookups in module-sdk 1.5+ (`getSubjectKey`), including config proofs and grant **Sig 1** (after the holder rejects non-`huglo:user:` `grant.author` values).
+- Clients reject wire `publicKey` values whose base64 decodes to anything other than **32 bytes** (`invalid_response`).
 
 ### 3.3.1 Get user public key (deprecated)
 ```

@@ -108,6 +108,24 @@ describe("directory unit", () => {
       });
     });
 
+    it("getSubjectKey throws invalid_response when body is not JSON", async () => {
+      const fetchFn = vi.fn().mockResolvedValue(
+        new Response("not json", {
+          status: 200,
+          headers: { "Content-Type": "text/plain" },
+        }),
+      );
+      const client = new HttpDirectoryClient({
+        directoryUrl: "https://directory.example",
+        fetch: fetchFn,
+      });
+
+      await expect(client.getSubjectKey("huglo:user:alice")).rejects.toMatchObject({
+        code: "invalid_response",
+        message: "Directory returned non-JSON response",
+      });
+    });
+
     it("getSubjectKey fails closed on 404", async () => {
       const fetchFn = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
       const client = new HttpDirectoryClient({
@@ -116,8 +134,75 @@ describe("directory unit", () => {
       });
 
       await expect(client.getSubjectKey("huglo:agent:agt_1")).rejects.toMatchObject({
-        code: "directory_error",
+        code: "subject_not_found",
       });
+    });
+
+    it("getSubjectKey rejects invalid namespace before fetch", async () => {
+      const fetchFn = vi.fn();
+      const client = new HttpDirectoryClient({
+        directoryUrl: "https://directory.example",
+        fetch: fetchFn,
+      });
+
+      await expect(client.getSubjectKey("huglo:USR:abc")).rejects.toMatchObject({
+        code: "invalid_subject",
+      });
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+
+    it("getSubjectKey rejects wrong-length module publicKey from directory", async () => {
+      const shortKey = Buffer.alloc(31).toString("base64");
+      const fetchFn = vi.fn().mockResolvedValue(
+        Response.json(
+          {
+            publicKey: shortKey,
+            endpoint: "https://module.example",
+          },
+          { status: 200 },
+        ),
+      );
+      const client = new HttpDirectoryClient({
+        directoryUrl: "https://directory.example",
+        fetch: fetchFn,
+      });
+
+      await expect(client.getModuleKey("mod-1")).rejects.toMatchObject({
+        code: "invalid_response",
+      });
+    });
+
+    it("getSubjectKey rejects wrong-length subject publicKey from directory", async () => {
+      const longKey = Buffer.alloc(64).toString("base64");
+      const subject = "huglo:user:alice";
+      const fetchFn = vi.fn().mockResolvedValue(
+        Response.json({ subject, publicKey: longKey }, { status: 200 }),
+      );
+      const client = new HttpDirectoryClient({
+        directoryUrl: "https://directory.example",
+        fetch: fetchFn,
+      });
+
+      await expect(client.getSubjectKey(subject)).rejects.toMatchObject({
+        code: "invalid_response",
+      });
+    });
+
+    it("subject key cache expires after TTL", async () => {
+      const subject = "huglo:user:alice";
+      const fetchFn = vi.fn().mockImplementation(async () =>
+        Response.json({ subject, publicKey: keys.publicKeyBase64 }, { status: 200 }),
+      );
+      const client = new HttpDirectoryClient({
+        directoryUrl: "https://directory.example",
+        ttlMs: 50,
+        fetch: fetchFn,
+      });
+
+      await client.getSubjectKey(subject);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      await client.getSubjectKey(subject);
+      expect(fetchFn).toHaveBeenCalledTimes(2);
     });
 
     it("caches module key across repeated getModuleKey calls", async () => {

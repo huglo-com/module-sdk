@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { generateKeyPair } from "../src/keys.js";
 import { signObject } from "../src/signing.js";
+import type { DirectoryClient } from "../src/directory.js";
 import { HttpDirectoryClient, InMemoryDirectoryClient } from "../src/directory.js";
 import {
   verifyConfigProof,
@@ -100,7 +101,14 @@ describe("config-proof", () => {
       privateKey: userKeys.privateKey,
     });
     await expect(verifyConfigProof(proof, verifyOpts())).rejects.toMatchObject({
-      code: "config_proof_user_not_found",
+      code: "config_proof_subject_not_found",
+    });
+  });
+
+  it("rejects malformed assertion subject before directory lookup", async () => {
+    const proof = validProof({ subject: "huglo:user:" });
+    await expect(verifyConfigProof(proof, verifyOpts())).rejects.toMatchObject({
+      code: "config_proof_invalid",
     });
   });
 
@@ -119,6 +127,30 @@ describe("config-proof", () => {
   it("rejects malformed proof", async () => {
     await expect(verifyConfigProof(null, verifyOpts())).rejects.toMatchObject({
       code: "invalid_config_proof",
+    });
+  });
+
+  it("maps non-ModuleError directory failures to retryable unavailable", async () => {
+    const proof = validProof();
+    const directory: DirectoryClient = {
+      getSubjectKey: () => Promise.reject(new TypeError("fetch failed")),
+      getModuleKey: async () => {
+        throw new Error("not used");
+      },
+      getEndpoint: async () => {
+        throw new Error("not used");
+      },
+      isRevoked: async () => false,
+      createInvite: async () => {
+        throw new Error("not used");
+      },
+      exchangeGrants: async () => [],
+    };
+    await expect(
+      verifyConfigProof(proof, { moduleId, directory, nonceCache }),
+    ).rejects.toMatchObject({
+      code: "config_proof_directory_unavailable",
+      retryable: true,
     });
   });
 
@@ -237,7 +269,20 @@ describe("config-proof HttpDirectoryClient lookup", () => {
     });
     const fetchFn = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
     await expect(httpVerify(fetchFn, proof)).rejects.toMatchObject({
-      code: "config_proof_user_not_found",
+      code: "config_proof_subject_not_found",
+    });
+  });
+
+  it("maps directory 503 to a retryable config proof error", async () => {
+    const proof = createSignedConfigProof({
+      subject: "huglo:agent:agt_missing",
+      audience: moduleId,
+      privateKey: agentKeys.privateKey,
+    });
+    const fetchFn = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
+    await expect(httpVerify(fetchFn, proof)).rejects.toMatchObject({
+      code: "config_proof_directory_unavailable",
+      retryable: true,
     });
   });
 
@@ -254,7 +299,7 @@ describe("config-proof HttpDirectoryClient lookup", () => {
       }),
     );
     await expect(httpVerify(fetchFn, proof)).rejects.toMatchObject({
-      code: "config_proof_user_not_found",
+      code: "config_proof_invalid",
     });
   });
 });
