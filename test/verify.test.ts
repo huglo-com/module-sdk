@@ -341,9 +341,9 @@ describe("verify", () => {
             { status: 200 },
           );
         }
-        if (path.includes("/users/user-abc/key")) {
+        if (path.includes(`/directory/subjects/${encodeURIComponent("huglo:user:user-abc")}/key`)) {
           return Response.json(
-            { userId: "user-abc", publicKey: authorKeys.publicKeyBase64 },
+            { subject: "huglo:user:user-abc", publicKey: authorKeys.publicKeyBase64 },
             { status: 200 },
           );
         }

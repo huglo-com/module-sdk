@@ -6,6 +6,8 @@ This document describes the cross-repo **config identity proof** feature. The mo
 
 A valid invoke grant proves *who may call a scope*, but not *which config instance* is allowed. Config instances must be bound to a **verifiable Huglo subject** at save time so invoke can enforce `instance.directorySubject === grant.subject`.
 
+`verifyConfigProof` loads the signing key with `GET /directory/subjects/{encodeURIComponent(assertion.subject)}/key`. That covers `huglo:user:` and non-user principals such as `huglo:agent:<id>`. It does not treat agent ids as user ids and does not fall back to `GET /directory/users/:id/key`.
+
 ## Two sessions in the config popup
 
 | Session | Purpose | Source |
