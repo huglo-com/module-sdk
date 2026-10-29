@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
+import pino, { type Logger } from "pino";
 import { z } from "zod";
 import type { ModuleKeyPair } from "./keys.js";
 import type { DirectoryClient } from "./directory.js";
@@ -156,6 +157,8 @@ export interface ModuleConfig extends GrantCallbackOptions {
   fileStore?: FileStore;
   /** Enable Prometheus metrics at GET /metrics (default: true). Set false to opt out. */
   metrics?: boolean;
+  /** Enable Pino request logging (default: true). Set false to opt out. */
+  logging?: boolean;
 }
 
 export type {
@@ -230,6 +233,7 @@ export class Module {
   private defaultConfigStore: ConfigStore | undefined;
   private defaultFileStore: InMemoryFileStore | undefined;
   private readonly moduleMetrics: ModuleMetrics | undefined;
+  private readonly moduleLogger: Logger | undefined;
   private app: Hono | null = null;
   private server: ReturnType<typeof serve> | null = null;
   customRoutes: Hono | undefined;
@@ -247,6 +251,10 @@ export class Module {
       new HttpDirectoryClient({ directoryUrl: resolveDirectoryUrl(config) });
     this.moduleMetrics =
       config.metrics === false ? undefined : createModuleMetrics(config.id);
+    this.moduleLogger =
+      config.logging === false
+        ? undefined
+        : pino({ level: "info" }).child({ module_id: config.id });
   }
 
   /**
@@ -358,6 +366,11 @@ export class Module {
     return this.moduleMetrics;
   }
 
+  /** Get the module logger (undefined when logging is disabled). */
+  getLogger(): Logger | undefined {
+    return this.moduleLogger;
+  }
+
   /**
    * Store a short-lived file and return public metadata including a download URL.
    * Requires MODULE_ENDPOINT or config.endpoint.
@@ -464,6 +477,7 @@ export class Module {
       onConfigSaved: this.init.onConfigSaved,
       fileStore: this.getFileStoreForServer(),
       metrics: this.moduleMetrics,
+      logger: this.moduleLogger,
     });
     return this.app;
   }

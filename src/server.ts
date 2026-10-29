@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
+import type { Logger } from "pino";
 import { routePath } from "hono/route";
 import { serveStatic } from "@hono/node-server/serve-static";
 import type { KeyObject } from "node:crypto";
@@ -84,6 +85,7 @@ export interface ServerConfig {
   onConfigSaved?: OnConfigSaved;
   fileStore?: FileStore;
   metrics?: ModuleMetrics;
+  logger?: Logger;
 }
 
 export type ProtectedScopeHandler<I, O> = (ctx: ProtectedCtx<I>) => Promise<O>;
@@ -100,6 +102,10 @@ export function createModuleServer(options: CreateServerOptions): Hono {
   const app = new Hono();
   const nonceCache = options.nonceCache ?? new NonceCache();
   const configProofNonceCache = options.configProofNonceCache ?? new NonceCache();
+
+  if (options.logger) {
+    app.use("*", createRequestLogMiddleware(options.logger));
+  }
 
   app.get("/health", (c) => c.json({ status: "ok", module: options.moduleId }));
 
@@ -303,6 +309,28 @@ export function createModuleServer(options: CreateServerOptions): Hono {
   });
 
   return app;
+}
+
+export function createRequestLogMiddleware(logger: Logger): MiddlewareHandler {
+  return async (c, next) => {
+    const start = performance.now();
+    await next();
+    const durationMs = Math.round(performance.now() - start);
+    const bindings = {
+      method: c.req.method,
+      path: c.req.path,
+      status: c.res.status,
+      durationMs,
+    };
+    const status = c.res.status;
+    if (status >= 500) {
+      logger.error(bindings, "request");
+    } else if (status >= 400) {
+      logger.warn(bindings, "request");
+    } else {
+      logger.info(bindings, "request");
+    }
+  };
 }
 
 function createMetricsMiddleware(metrics: ModuleMetrics): MiddlewareHandler {
