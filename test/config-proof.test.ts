@@ -9,6 +9,7 @@ import {
   CONFIG_PROOF_TTL_MS,
 } from "../src/config-proof.js";
 import { NonceCache } from "../src/verify.js";
+import { ModuleError } from "../src/errors.js";
 import { createSignedConfigProof } from "./helpers/create-signed-config-proof.js";
 
 describe("config-proof", () => {
@@ -131,9 +132,10 @@ describe("config-proof", () => {
   });
 
   it("maps non-ModuleError directory failures to retryable unavailable", async () => {
+    const root = new TypeError("fetch failed");
     const proof = validProof();
     const directory: DirectoryClient = {
-      getSubjectKey: () => Promise.reject(new TypeError("fetch failed")),
+      getSubjectKey: () => Promise.reject(root),
       getModuleKey: async () => {
         throw new Error("not used");
       },
@@ -146,12 +148,20 @@ describe("config-proof", () => {
       },
       exchangeGrants: async () => [],
     };
-    await expect(
-      verifyConfigProof(proof, { moduleId, directory, nonceCache }),
-    ).rejects.toMatchObject({
+    let caught: unknown;
+    try {
+      await verifyConfigProof(proof, { moduleId, directory, nonceCache });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ModuleError);
+    const moduleErr = caught as ModuleError;
+    expect(moduleErr).toMatchObject({
       code: "config_proof_directory_unavailable",
+      message: "Config proof verification is temporarily unavailable",
       retryable: true,
     });
+    expect(moduleErr.cause).toBe(root);
   });
 
   it("verifyConfigProof accepts an agent subject registered on the subject key map", async () => {
@@ -280,10 +290,50 @@ describe("config-proof HttpDirectoryClient lookup", () => {
       privateKey: agentKeys.privateKey,
     });
     const fetchFn = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
-    await expect(httpVerify(fetchFn, proof)).rejects.toMatchObject({
+    let caught: unknown;
+    try {
+      await httpVerify(fetchFn, proof);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ModuleError);
+    const moduleErr = caught as ModuleError;
+    expect(moduleErr).toMatchObject({
       code: "config_proof_directory_unavailable",
+      message: "Config proof verification is temporarily unavailable",
       retryable: true,
     });
+    expect(moduleErr.cause).toBeInstanceOf(ModuleError);
+    expect((moduleErr.cause as ModuleError).code).toBe("directory_error");
+  });
+
+  it("maps directory_unreachable with generic client message and directory error cause", async () => {
+    const tlsCause = new Error("self signed certificate");
+    tlsCause.name = "TLSError";
+    const fetchErr = new Error("fetch failed") as Error & { code: string };
+    fetchErr.code = "ENOTFOUND";
+    fetchErr.cause = tlsCause;
+    const fetchFn = vi.fn().mockRejectedValue(fetchErr);
+    const proof = createSignedConfigProof({
+      subject: "huglo:agent:agt_1",
+      audience: moduleId,
+      privateKey: agentKeys.privateKey,
+    });
+    let caught: unknown;
+    try {
+      await httpVerify(fetchFn, proof);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ModuleError);
+    const moduleErr = caught as ModuleError;
+    expect(moduleErr.message).toBe("Config proof verification is temporarily unavailable");
+    expect(moduleErr.code).toBe("config_proof_directory_unavailable");
+    expect(moduleErr.cause).toBeInstanceOf(ModuleError);
+    const directoryErr = moduleErr.cause as ModuleError;
+    expect(directoryErr.code).toBe("directory_unreachable");
+    expect(directoryErr.message).toBe("Unable to reach Huglo directory");
+    expect(directoryErr.cause).toBe(fetchErr);
   });
 
   it("fails closed when the directory returns another principal's key", async () => {

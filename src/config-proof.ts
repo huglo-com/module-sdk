@@ -33,39 +33,58 @@ export interface VerifyConfigProofOptions {
   maxClockSkewMs?: number;
 }
 
-function configProofError(code: string, message: string): ModuleError {
-  return new ModuleError({ code, message, retryable: false });
+function configProofError(code: string, message: string, cause?: unknown): ModuleError {
+  return new ModuleError({ code, message, retryable: false, cause });
 }
 
-function configProofRetryable(message: string): ModuleError {
+function configProofRetryable(message: string, cause?: unknown): ModuleError {
   return new ModuleError({
     code: "config_proof_directory_unavailable",
     message,
     retryable: true,
+    cause,
   });
 }
 
 function mapDirectoryErrorForConfigProof(err: unknown): ModuleError {
   if (!(err instanceof ModuleError)) {
-    return configProofRetryable("Config proof verification is temporarily unavailable");
+    return configProofRetryable(
+      "Config proof verification is temporarily unavailable",
+      err,
+    );
   }
   switch (err.code) {
     case "subject_not_found":
       return configProofError(
         "config_proof_subject_not_found",
         "Config proof subject not found in directory",
+        err,
       );
     case "invalid_subject":
     case "invalid_response":
-      return configProofError("config_proof_invalid", "Config proof could not be verified");
+      return configProofError(
+        "config_proof_invalid",
+        "Config proof could not be verified",
+        err,
+      );
     case "directory_unreachable":
     case "directory_error":
-      return configProofRetryable("Config proof verification is temporarily unavailable");
+      return configProofRetryable(
+        "Config proof verification is temporarily unavailable",
+        err,
+      );
     default:
       if (err.retryable) {
-        return configProofRetryable("Config proof verification is temporarily unavailable");
+        return configProofRetryable(
+          "Config proof verification is temporarily unavailable",
+          err,
+        );
       }
-      return configProofError("config_proof_invalid", "Config proof could not be verified");
+      return configProofError(
+        "config_proof_invalid",
+        "Config proof could not be verified",
+        err,
+      );
   }
 }
 

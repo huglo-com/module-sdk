@@ -120,10 +120,16 @@ describe("directory unit", () => {
         fetch: fetchFn,
       });
 
-      await expect(client.getSubjectKey("huglo:user:alice")).rejects.toMatchObject({
+      let caught: unknown;
+      try {
+        await client.getSubjectKey("huglo:user:alice");
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toMatchObject({
         code: "invalid_response",
-        message: "Directory returned non-JSON response",
       });
+      expect((caught as ModuleError).message).toContain("Directory returned non-JSON response");
     });
 
     it("getSubjectKey fails closed on 404", async () => {
@@ -239,6 +245,33 @@ describe("directory unit", () => {
       });
     });
 
+    it("preserves nested transport errors on directory_unreachable", async () => {
+      const tlsCause = new Error("certificate has expired");
+      tlsCause.name = "TLSError";
+      const fetchErr = new Error("fetch failed") as Error & { code: string };
+      fetchErr.code = "ECONNREFUSED";
+      fetchErr.cause = tlsCause;
+      const fetchFn = vi.fn().mockRejectedValue(fetchErr);
+      const client = new HttpDirectoryClient({
+        directoryUrl: "https://directory.example",
+        fetch: fetchFn,
+      });
+
+      let caught: unknown;
+      try {
+        await client.getModuleKey("mod-1");
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(ModuleError);
+      const moduleErr = caught as ModuleError;
+      expect(moduleErr.code).toBe("directory_unreachable");
+      expect(moduleErr.message).toBe("Unable to reach Huglo directory");
+      expect(moduleErr.cause).toBe(fetchErr);
+      expect((moduleErr.cause as Error & { code: string }).code).toBe("ECONNREFUSED");
+      expect((moduleErr.cause as Error).cause).toBe(tlsCause);
+    });
+
     it("throws directory_error when response is not ok", async () => {
       const fetchFn = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
       const client = new HttpDirectoryClient({
@@ -311,10 +344,14 @@ describe("directory unit", () => {
         );
         const client = new HttpDirectoryClient({ directoryUrl: baseUrl, fetch: fetchFn });
 
-        await expect(client.createInvite("mod-1", signedInvite)).rejects.toMatchObject({
-          code: "invalid_response",
-          message: "Directory returned non-JSON response",
-        });
+        let caught: unknown;
+        try {
+          await client.createInvite("mod-1", signedInvite);
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught).toMatchObject({ code: "invalid_response" });
+        expect((caught as ModuleError).message).toContain("Directory returned non-JSON response");
       });
 
       it("createInvite throws invalid_response on malformed JSON body", async () => {
@@ -323,10 +360,14 @@ describe("directory unit", () => {
         );
         const client = new HttpDirectoryClient({ directoryUrl: baseUrl, fetch: fetchFn });
 
-        await expect(client.createInvite("mod-1", signedInvite)).rejects.toMatchObject({
-          code: "invalid_response",
-          message: "Directory response is malformed",
-        });
+        let caught: unknown;
+        try {
+          await client.createInvite("mod-1", signedInvite);
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught).toMatchObject({ code: "invalid_response" });
+        expect((caught as ModuleError).message).toContain("Directory response is malformed");
       });
 
       it("exchangeGrants throws invalid_response on non-JSON body", async () => {
@@ -338,10 +379,14 @@ describe("directory unit", () => {
         );
         const client = new HttpDirectoryClient({ directoryUrl: baseUrl, fetch: fetchFn });
 
-        await expect(client.exchangeGrants("code-1")).rejects.toMatchObject({
-          code: "invalid_response",
-          message: "Directory returned non-JSON response",
-        });
+        let caught: unknown;
+        try {
+          await client.exchangeGrants("code-1");
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught).toMatchObject({ code: "invalid_response" });
+        expect((caught as ModuleError).message).toContain("Directory returned non-JSON response");
       });
     });
   });

@@ -199,6 +199,7 @@ export function createModuleServer(options: CreateServerOptions): Hono {
       renderConfigPage: options.renderConfigPage,
       onConfigSaved: options.onConfigSaved,
       configProofNonceCache,
+      logger: options.logger,
     });
   }
 
@@ -513,7 +514,8 @@ function createGrantInitHandler(options: CreateServerOptions) {
         },
       );
       return c.redirect(inviteUrl);
-    } catch {
+    } catch (err) {
+      options.logger?.error({ err }, "grant init failed");
       return c.html(
         grantCallbackHtml("Could not start authorization.", false),
         502,
