@@ -60,7 +60,11 @@ async function resolveEndpoint(
     return await directory.getEndpoint(target);
   } catch (err) {
     if (err instanceof ModuleError) throw err;
-    throw infraError("directory_unreachable", "Unable to resolve target endpoint");
+    throw infraError(
+      "directory_unreachable",
+      "Unable to resolve target endpoint",
+      err,
+    );
   }
 }
 
@@ -74,15 +78,23 @@ async function fetchHolderKey(
     return await directory.getModuleKey(target, parsed.keyId);
   } catch (err) {
     if (err instanceof ModuleError) throw err;
-    throw infraError("directory_unreachable", "Unable to fetch holder public key");
+    throw infraError(
+      "directory_unreachable",
+      "Unable to fetch holder public key",
+      err,
+    );
   }
 }
 
 function parseInvokeResponseBody(body: unknown): InvokeResponse {
   try {
     return InvokeResponseSchema.parse(body);
-  } catch {
-    throw infraError("invalid_response", "Target response envelope is malformed");
+  } catch (err) {
+    throw infraError(
+      "invalid_response",
+      "Target response envelope is malformed",
+      err,
+    );
   }
 }
 
@@ -143,15 +155,23 @@ export async function callScope(
       },
       body: requestBody,
     });
-  } catch {
-    throw infraError("network_error", "Failed to reach target module");
+  } catch (err) {
+    throw infraError(
+      "network_error",
+      "Failed to reach target module",
+      err,
+    );
   }
 
   let body: unknown;
   try {
     body = await response.json();
-  } catch {
-    throw infraError("invalid_response", "Target returned non-JSON response");
+  } catch (err) {
+    throw infraError(
+      "invalid_response",
+      "Target returned non-JSON response",
+      err,
+    );
   }
 
   const invokeResponse = parseInvokeResponseBody(body);

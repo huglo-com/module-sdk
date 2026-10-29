@@ -8,6 +8,7 @@ import type { ConfigStore } from "./config-store.js";
 import type { DirectoryClient } from "./directory.js";
 import { verifyConfigProof } from "./config-proof.js";
 import { ModuleError } from "./errors.js";
+import type { Logger } from "pino";
 import type { NonceCache } from "./verify.js";
 import type { ConfigManifestEntry } from "./manifest.js";
 import { buildConfigManifest } from "./manifest.js";
@@ -74,6 +75,7 @@ export interface ConfigRoutesOptions {
   renderConfigPage?: RenderConfigPage;
   onConfigSaved?: OnConfigSaved;
   configProofNonceCache: NonceCache;
+  logger?: Logger;
 }
 
 export function mountConfigRoutes(app: Hono, options: ConfigRoutesOptions): void {
@@ -265,11 +267,17 @@ async function parseIntakeBody(c: Context): Promise<IntakeBody | Response> {
   }
 }
 
-function proofVerificationErrorResponse(c: Context, err: unknown): Response {
+function proofVerificationErrorResponse(
+  c: Context,
+  err: unknown,
+  logger?: Logger,
+): Response {
   if (err instanceof ModuleError) {
+    logger?.error({ err }, "config proof verification failed");
     const status = err.code.startsWith("config_proof_") ? 403 : 400;
     return c.json({ error: err.message, code: err.code }, status);
   }
+  logger?.error({ err }, "config proof verification failed");
   return c.json({ error: "Invalid config proof" }, 403);
 }
 
@@ -338,7 +346,7 @@ async function handleIntake(
       nonceCache: options.configProofNonceCache,
     });
   } catch (err) {
-    return proofVerificationErrorResponse(c, err);
+    return proofVerificationErrorResponse(c, err, options.logger);
   }
 
   let values: Record<string, unknown>;

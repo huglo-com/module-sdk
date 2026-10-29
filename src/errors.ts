@@ -2,6 +2,7 @@ export interface ModuleErrorOptions {
   code: string;
   message: string;
   retryable: boolean;
+  cause?: unknown;
 }
 
 export class ModuleError extends Error {
@@ -9,7 +10,11 @@ export class ModuleError extends Error {
   readonly retryable: boolean;
 
   constructor(options: ModuleErrorOptions) {
-    super(options.message);
+    if (options.cause !== undefined) {
+      super(options.message, { cause: options.cause });
+    } else {
+      super(options.message);
+    }
     this.name = "ModuleError";
     this.code = options.code;
     this.retryable = options.retryable;
@@ -48,6 +53,10 @@ export function authError(code: string, message: string): ModuleError {
 }
 
 /** Create a ModuleError for transient infrastructure failures (retryable). */
-export function infraError(code: string, message: string): ModuleError {
-  return new ModuleError({ code, message, retryable: true });
+export function infraError(
+  code: string,
+  message: string,
+  cause?: unknown,
+): ModuleError {
+  return new ModuleError({ code, message, retryable: true, cause });
 }

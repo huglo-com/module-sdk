@@ -1,9 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
 import { generateKeyPair } from "../src/keys.js";
 import { signObject } from "../src/signing.js";
 import { InMemoryDirectoryClient } from "../src/directory.js";
 import { callScope } from "../src/client.js";
+import { ModuleError } from "../src/errors.js";
 import type { SignedGrant } from "../src/envelope.js";
 import { sig2OpenPayload } from "../src/envelope.js";
 
@@ -77,6 +78,37 @@ describe("client", () => {
         { target: "trovi", scope: "test:scope", input: {}, grant },
       ),
     ).rejects.toMatchObject({ code: "module_not_found" });
+  });
+
+  it("preserves nested transport errors on network_error", async () => {
+    const tlsCause = new Error("certificate has expired");
+    tlsCause.name = "TLSError";
+    const fetchErr = new Error("fetch failed") as Error & { code: string };
+    fetchErr.code = "ECONNREFUSED";
+    fetchErr.cause = tlsCause;
+    const fetchMock = vi.fn().mockRejectedValue(fetchErr);
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const grant = buildGrant();
+      let caught: unknown;
+      try {
+        await callScope(
+          { moduleId: "foaf", privateKey: requesterKeys.privateKey, directory },
+          { target: "trovi", scope: "test:scope", input: {}, grant },
+        );
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(ModuleError);
+      const moduleErr = caught as ModuleError;
+      expect(moduleErr.code).toBe("network_error");
+      expect(moduleErr.message).toBe("Failed to reach target module");
+      expect(moduleErr.cause).toBe(fetchErr);
+      expect((moduleErr.cause as Error & { code: string }).code).toBe("ECONNREFUSED");
+      expect((moduleErr.cause as Error).cause).toBe(tlsCause);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("open call envelope has no grant field", () => {

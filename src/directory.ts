@@ -40,7 +40,11 @@ function importDirectoryPublicKey(b64: string): KeyObject {
     return importPublicKeyBase64(b64);
   } catch (err) {
     if (err instanceof ModuleError) throw err;
-    throw infraError("invalid_response", "Directory public key is malformed");
+    throw infraError(
+      "invalid_response",
+      "Directory public key is malformed",
+      err,
+    );
   }
 }
 
@@ -233,10 +237,11 @@ export class HttpDirectoryClient implements DirectoryClient {
       response = await this.fetchFn(url, {
         headers: { Accept: "application/json" },
       });
-    } catch {
+    } catch (err) {
       throw infraError(
         "directory_unreachable",
         "Unable to reach Huglo directory",
+        err,
       );
     }
     if (response.status === 404) {
@@ -250,8 +255,12 @@ export class HttpDirectoryClient implements DirectoryClient {
     }
     try {
       return (await response.json()) as unknown;
-    } catch {
-      throw infraError("invalid_response", "Directory returned non-JSON response");
+    } catch (err) {
+      throw infraError(
+        "invalid_response",
+        "Directory returned non-JSON response",
+        err,
+      );
     }
   }
 
@@ -261,10 +270,11 @@ export class HttpDirectoryClient implements DirectoryClient {
       response = await this.fetchFn(url, {
         headers: { Accept: "application/json" },
       });
-    } catch {
+    } catch (err) {
       throw infraError(
         "directory_unreachable",
         "Unable to reach Huglo directory",
+        err,
       );
     }
     if (!response.ok) {
@@ -291,10 +301,11 @@ export class HttpDirectoryClient implements DirectoryClient {
         },
         body: JSON.stringify(body),
       });
-    } catch {
+    } catch (err) {
       throw infraError(
         "directory_unreachable",
         "Unable to reach Huglo directory",
+        err,
       );
     }
     if (!response.ok) {
@@ -303,13 +314,21 @@ export class HttpDirectoryClient implements DirectoryClient {
     let json: unknown;
     try {
       json = await response.json();
-    } catch {
-      throw infraError("invalid_response", "Directory returned non-JSON response");
+    } catch (err) {
+      throw infraError(
+        "invalid_response",
+        "Directory returned non-JSON response",
+        err,
+      );
     }
     try {
       return schema.parse(json);
-    } catch {
-      throw infraError("invalid_response", "Directory response is malformed");
+    } catch (err) {
+      throw infraError(
+        "invalid_response",
+        "Directory response is malformed",
+        err,
+      );
     }
   }
 }

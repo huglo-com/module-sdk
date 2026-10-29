@@ -88,7 +88,7 @@ export class NonceCache {
 
 function rethrowDirectoryError(err: unknown, message: string): never {
   if (err instanceof ModuleError) throw err;
-  throw infraError("directory_unreachable", message);
+  throw infraError("directory_unreachable", message, err);
 }
 
 /** Step 1: Parse envelope. */
