@@ -28,6 +28,7 @@ function createModule(
     keyPair: keys,
     huglo: { directoryUrl: "http://unused" },
     directory,
+    logging: false,
     ...overrides,
   });
 }
